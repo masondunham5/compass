@@ -24,7 +24,9 @@ h1,h2,h3,p { margin: 0; } h1 { font-size: 1.35rem; letter-spacing: -.035em; } h2
 
 /* Purple portfolio theme: primary actions, selections, progress, and training emphasis. */
 :root { --hub-purple: #a855f7; --hub-purple-bright: #c084fc; --hub-purple-deep: #3b1764; --hub-purple-wash: #281443; }
-.eyebrow,.brand b,.brand-mark,.icon-button,.session-date,.empty-list span,.empty-icon { color: var(--hub-purple-bright); }
+.eyebrow,.brand b,.icon-button,.session-date,.empty-list span,.empty-icon { color: var(--hub-purple-bright); }
+.brand-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #f3e8ff; border: 1px solid #8b54c7; border-radius: 9px; background: linear-gradient(145deg, #44206f, #21122f); box-shadow: 0 5px 15px #0005; }
+.brand-mark svg { width: 18px; height: 18px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .nav-item.active { background: #291544; border-color: #7544b9; color: #eadcff; box-shadow: inset 3px 0 var(--hub-purple); }
 .icon-button:hover,.lock:hover,.back:hover,.install-button:hover { border-color: var(--hub-purple-bright); }
 .primary { background: var(--hub-purple); border-color: var(--hub-purple-bright); color: #fff; box-shadow: 0 0 20px #a855f733; }
@@ -37,3 +39,25 @@ h1,h2,h3,p { margin: 0; } h1 { font-size: 1.35rem; letter-spacing: -.035em; } h2
 .rest-timer button:first-child,.phase-preview article span { color: var(--hub-purple-bright); }
 input[type="range"],.toggle-row input { accent-color: var(--hub-purple); }
 .mobile-nav button.active { color: #e9d5ff; background: var(--hub-purple-wash); }
+
+/* Remove legacy neon accents that predate the purple Health Hub theme. */
+.sync::first-letter { color: var(--hub-purple-bright); }
+.install-button { color: #e9d5ff; border-color: #8b54c7; }
+.secondary { color: #eadcff; border-color: #7544b9; background: #221334; }
+.secondary:hover { border-color: var(--hub-purple-bright); background: #321b4c; }
+.suggestion { border-color: #7544b9; background: linear-gradient(145deg, #24163b, #15131d); }
+.suggestion h3,.goal-summary b,.run-brief h3,.health-score strong { color: #d8b4fe; }
+.goal-summary { border-color: #68468f; background: #211632; }
+.health-score { border-color: #68468f; background: linear-gradient(145deg, #25163b, #151b21); }
+.health-metrics b { color: #d8b4fe; }
+.run-brief { border-color: #7544b9; background: linear-gradient(135deg, #261941, #17151f); }
+.pace-readout { border-color: #68468f; background: #24183a; }
+.starting-guide { color: #d8b4fe; }
+.progress-card:hover { border-color: var(--hub-purple-bright); }
+.mini-chart { background: linear-gradient(180deg, #2a1943, #12171b); }
+.mini-chart span { background: linear-gradient(#d8b4fe, #9333ea); }
+.progress-table > div:first-child { color: #d8b4fe; }
+.upload-dropzone { border-color: #8b54c7; color: #eadcff; background: #1f1530; }
+.upload-dropzone:hover { border-color: #d8b4fe; background: #2a1b40; }
+.upload-dropzone > span { color: #d8b4fe; }
+.tag.activity { color: #e9d5ff; background: #3b1764; }
