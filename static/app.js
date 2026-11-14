@@ -421,22 +421,29 @@ async function openSession(sessionId) {
   if (finish) finish.onclick = async () => { await api(`/api/sessions/${encodeURIComponent(session.id)}/complete`, { method: "POST", body: JSON.stringify({ minutes: session.minutes, notes: "Logged in Lifting Hub", metrics: {} }) }); stopTimer(); await load(); selectView("plan"); };
 }
 
+function bindClick(selector, handler) {
+  const element = $(selector);
+  if (element) element.addEventListener("click", handler);
+}
+
 document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => selectView(button.dataset.view)));
-$("#checkin-button").onclick = () => openDialog(dialog);
-$("#quick-checkin").onclick = () => openDialog(dialog);
-$("#health-checkin-button").onclick = () => openDialog(healthDialog);
-$("#health-checkin-button-secondary").onclick = () => openDialog(healthDialog);
-$("#open-health-button").onclick = () => selectView("health");
-$("#garmin-sync-now").onclick = async () => {
+// `checkin-button` belonged to an earlier layout. Keep this guarded only for
+// backwards-compatible cached pages; the current dashboard uses health-checkin-button.
+bindClick("#checkin-button", () => openDialog(dialog));
+bindClick("#quick-checkin", () => openDialog(dialog));
+bindClick("#health-checkin-button", () => openDialog(healthDialog));
+bindClick("#health-checkin-button-secondary", () => openDialog(healthDialog));
+bindClick("#open-health-button", () => selectView("health"));
+bindClick("#garmin-sync-now", async () => {
   const button = $("#garmin-sync-now"); const message = $("#garmin-sync-message");
   button.disabled = true; button.textContent = "Syncing…"; message.textContent = "Pulling your latest private Garmin data…";
   try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = `Sync complete: ${result.activities_imported} new activities and ${result.metrics_updated} daily records.`; await load(); }
   catch (error) { message.textContent = error.message; }
   finally { button.textContent = "Sync now"; button.disabled = false; }
-};
+});
 document.querySelectorAll("[data-garmin-days]").forEach(button => button.onclick = async () => { garminDays = Number(button.dataset.garminDays); await load(); });
-$("#build-plan-button").onclick = () => openPlanBuilder();
-$("#adjust-plan-button").onclick = () => openPlanBuilder(activePlan);
+bindClick("#build-plan-button", () => openPlanBuilder());
+bindClick("#adjust-plan-button", () => openPlanBuilder(activePlan));
 $("#plan-form").addEventListener("submit", submitPlanDraft);
 planDialog.querySelector(".dialog-close").onclick = () => planDialog.close();
 $("#session-editor-form").addEventListener("submit", saveSessionEditor);
