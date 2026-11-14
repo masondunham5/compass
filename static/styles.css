@@ -60,4 +60,6 @@ input[type="range"],.toggle-row input { accent-color: var(--hub-purple); }
 .upload-dropzone { border-color: #8b54c7; color: #eadcff; background: #1f1530; }
 .upload-dropzone:hover { border-color: #d8b4fe; background: #2a1b40; }
 .upload-dropzone > span { color: #d8b4fe; }
+.garmin-dashboard,.settings-card { margin-top: 16px; padding: 18px; }.garmin-copy,.settings-card p:not(.eyebrow) { max-width: 760px; margin-top: 10px; color: #aeb9b4; line-height: 1.5; font-size: .84rem; }.settings-card code { padding: 2px 5px; border-radius: 4px; color: #eadcff; background: #2a1942; }.garmin-metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; margin-top: 18px; border: 1px solid #37404a; border-radius: 9px; background: #37404a; }.garmin-metric-grid div { display: grid; gap: 6px; padding: 15px; background: #151b21; }.garmin-metric-grid span { color: #97a59f; font-size: .72rem; }.garmin-metric-grid b { color: #d8b4fe; font-size: 1rem; }.garmin-dashboard .muted { display: block; min-height: 1.2em; margin-top: 12px; }
+@media (max-width: 620px) { .garmin-metric-grid { grid-template-columns: 1fr 1fr; }.garmin-dashboard .panel-heading { align-items: flex-start; flex-direction: column; }.garmin-dashboard .outline { width: 100%; } }
 .tag.activity { color: #e9d5ff; background: #3b1764; }

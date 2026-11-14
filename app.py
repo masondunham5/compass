@@ -27,6 +27,26 @@ DATABASE = DATA_DIR / "lifting_hub.db"
 LEGACY_FILE = Path(os.getenv("LOCALAPPDATA", ".")) / "Training Planner" / "planner.json"
 STATIC = ROOT / "static"
 
+
+def load_local_env() -> None:
+    """Load simple KEY=value pairs from a local .env without adding a dependency.
+
+    The file is intentionally ignored by Git and values already provided by Windows
+    or Task Scheduler always win.
+    """
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+load_local_env()
+
 app = FastAPI(
     title="Health Hub",
     description="A local-first training, recovery, and activity planner.",
@@ -268,6 +288,28 @@ def initialize() -> None:
                 details_json TEXT NOT NULL DEFAULT '{}',
                 imported_at TEXT NOT NULL,
                 linked_session_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS garmin_daily_metrics (
+                calendar_date TEXT PRIMARY KEY,
+                steps INTEGER,
+                active_calories REAL,
+                total_calories REAL,
+                resting_hr INTEGER,
+                hrv_ms REAL,
+                sleep_seconds INTEGER,
+                stress_avg REAL,
+                body_battery INTEGER,
+                source_json TEXT NOT NULL DEFAULT '{}',
+                synced_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS garmin_sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                activities_imported INTEGER NOT NULL DEFAULT 0,
+                metrics_updated INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT ''
             );
             """
         )
@@ -566,6 +608,64 @@ def health_summary() -> dict[str, Any]:
         "imported_run_miles": run_miles,
         "recommendation": health_recommendation(latest),
     }
+
+
+def garmin_status() -> dict[str, Any]:
+    """Return connection metadata only; the Personal API key never reaches the UI."""
+    configured = bool(os.getenv("GARMIN_PERSONAL_API_KEY", "").strip())
+    expires_on = os.getenv("GARMIN_KEY_EXPIRES_ON", "").strip() or None
+    with connection() as db:
+        latest = db.execute(
+            "SELECT started_at, finished_at, status, activities_imported, metrics_updated, message "
+            "FROM garmin_sync_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    warning = None
+    if expires_on:
+        try:
+            remaining = (date.fromisoformat(expires_on) - date.today()).days
+            if remaining <= 0:
+                warning = "Your Garmin key appears to be expired. Create a new key in Garmin Connect."
+            elif remaining <= 14:
+                warning = f"Your Garmin key expires in {remaining} day{'s' if remaining != 1 else ''}."
+        except ValueError:
+            warning = "GARMIN_KEY_EXPIRES_ON should use YYYY-MM-DD."
+    return {"configured": configured, "expires_on": expires_on, "warning": warning, "last_sync": dict(latest) if latest else None}
+
+
+@app.get("/api/garmin/status")
+def get_garmin_status() -> dict[str, Any]:
+    return garmin_status()
+
+
+@app.get("/api/garmin/dashboard")
+def garmin_dashboard() -> dict[str, Any]:
+    since = (date.today() - timedelta(days=6)).isoformat()
+    with connection() as db:
+        rows = db.execute(
+            "SELECT * FROM garmin_daily_metrics WHERE calendar_date >= ? ORDER BY calendar_date DESC", (since,)
+        ).fetchall()
+    records = [dict(row) for row in rows]
+    latest = records[0] if records else None
+    average = lambda key: round(sum(row[key] or 0 for row in records if row[key] is not None) / max(1, sum(row[key] is not None for row in records)), 1)
+    return {
+        "status": garmin_status(),
+        "latest": latest,
+        "records": records,
+        "average_sleep_hours": round(average("sleep_seconds") / 3600, 1) if any(row["sleep_seconds"] for row in records) else None,
+        "average_steps": round(average("steps")) if any(row["steps"] is not None for row in records) else None,
+        "average_hrv": average("hrv_ms") if any(row["hrv_ms"] is not None for row in records) else None,
+    }
+
+
+@app.post("/api/garmin/sync")
+def sync_garmin_now() -> dict[str, Any]:
+    if not os.getenv("GARMIN_PERSONAL_API_KEY", "").strip():
+        raise HTTPException(status_code=400, detail="Garmin is not connected yet. Add your key to the local .env file first.")
+    try:
+        from garmin_sync import GarminSyncError, run_sync
+        return run_sync(days=2)
+    except GarminSyncError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.post("/api/health/checkin")

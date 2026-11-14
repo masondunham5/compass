@@ -16,6 +16,7 @@ and reviewable Garmin activity imports—without requiring a cloud account.
 - Adds a daily health check-in for sleep, energy, soreness, stress, protein consistency, and optional weight.
 - Provides a recovery-first recommendation without changing training automatically.
 - Imports Garmin CSV, TCX, and GPX activity exports locally; a run is linked to a planned session only after explicit approval.
+- Is ready for an optional Garmin Connect Personal API sync: activities plus daily sleep, HRV, resting heart rate, steps, calories, stress, and Body Battery are stored only in the local database.
 - Lets you lock a session so later scheduling changes cannot move it.
 - Provides an active-workout screen with exercise targets, per-set weight/reps,
   quick `+5` weight changes, completion states, and a rest timer.
@@ -82,11 +83,54 @@ the same private Tailscale network. That provides private phone access without
 exposing the app directly to the public internet. Use HTTPS before treating the
 phone deployment as installable outside of your home computer.
 
+## Optional Garmin Personal API sync
+
+This is an optional **personal-use** connection. Health Hub never stores a
+Garmin password. It stores only the Personal API key you create in Garmin
+Connect, and only in a local `.env` file that Git ignores.
+
+On the always-on Windows computer:
+
+1. Create a Garmin Personal API key in Garmin Connect. Do not share it or add
+   it to GitHub.
+2. Copy `.env.example` to `.env` in the Health Hub project folder.
+3. Set the following values in `.env`:
+
+   ```text
+   GARMIN_PERSONAL_API_KEY=your-key-here
+   GARMIN_KEY_EXPIRES_ON=2027-11-14
+   GARMIN_SYNC_DAYS=2
+   ```
+
+4. With the server stopped or running, test a rolling seven-day pull:
+
+   ```powershell
+   .\.venv\Scripts\python.exe garmin_sync.py --days 7
+   ```
+
+5. Open Health Hub and review **Recovery**. The Garmin Daily Sync section
+   reports connection state, last sync, and the first dashboard metrics.
+
+For automatic daily updates, create a second Task Scheduler task (separate
+from the server task):
+
+```text
+Program/script: <Health Hub folder>\.venv\Scripts\python.exe
+Arguments: garmin_sync.py --days 2
+Start in: <Health Hub folder>
+Trigger: Daily, after Garmin Connect has had time to sync your watch
+```
+
+The sync task may be run repeatedly; it upserts daily metrics and ignores
+already-imported activities. If Garmin rejects a key, Health Hub records a
+safe error message and leaves existing data unchanged.
+
 ## Project structure
 
 ```text
 health-hub/
 ├── app.py                 # FastAPI routes, planning logic, SQLite persistence
+├── garmin_sync.py         # Optional private Garmin Personal API sync command
 ├── static/                # Responsive PWA interface
 ├── scripts/load_demo_data.py
 ├── tests/                 # Focused automated checks

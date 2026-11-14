@@ -137,6 +137,32 @@ function renderHealth(data) {
   target.innerHTML = data.records.map((record, index) => `<article class="health-log-card"><div><p class="eyebrow">${index === 0 ? "LATEST CHECK-IN" : "HEALTH CHECK-IN"}</p><h3>${displayDate(record.checkin_date)}</h3><p>${record.notes ? escapeHtml(record.notes) : "No notes added."}</p></div><div class="health-stat-pills"><span>Sleep ${record.sleep_hours}h</span><span>Energy ${record.energy}/10</span><span>Soreness ${record.soreness}/10</span><span>Stress ${record.stress}/10</span>${record.weight_lbs ? `<span>${record.weight_lbs} lb</span>` : ""}</div></article>`).join("");
 }
 
+function displaySyncTime(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "—" : parsed.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function renderGarmin(data) {
+  const status = data.status || {};
+  const latest = data.latest;
+  const sync = status.last_sync;
+  $("#garmin-connection-title").textContent = status.configured ? "Garmin connected locally" : "Garmin not connected";
+  $("#garmin-connection-copy").textContent = status.configured
+    ? (status.warning || "This server can pull your private Garmin activities and daily recovery metrics.")
+    : "Add a Personal API key in Settings when you are ready. Health Hub will keep it only on this computer.";
+  $("#garmin-last-sync").textContent = sync?.status === "success" ? displaySyncTime(sync.finished_at) : "Not synced";
+  $("#garmin-sleep").textContent = data.average_sleep_hours ? `${data.average_sleep_hours} h` : "—";
+  $("#garmin-hrv").textContent = data.average_hrv ? `${data.average_hrv} ms` : "—";
+  $("#garmin-steps").textContent = data.average_steps ? Number(data.average_steps).toLocaleString() : "—";
+  $("#garmin-sync-message").textContent = sync?.status === "error" ? sync.message : status.warning || "";
+  $("#garmin-sync-now").disabled = !status.configured;
+  $("#garmin-sync-now").title = status.configured ? "Pull the latest Garmin data" : "Add a local Garmin key in Settings first";
+  $("#garmin-settings-status").textContent = status.configured
+    ? `Connected locally${status.expires_on ? ` · key expiration ${status.expires_on}` : ""}${status.warning ? ` · ${status.warning}` : ""}`
+    : "Not connected yet. No Garmin key is stored in this app or in GitHub.";
+}
+
 function renderActivities(data) {
   importedActivities = data.activities;
   const target = $("#activity-list");
@@ -228,7 +254,7 @@ async function submitPlanDraft(event) {
 }
 
 async function load() {
-  const [data, insights, history, progress, plans, health, activities] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities")]);
+  const [data, insights, history, progress, plans, health, activities, garmin] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api("/api/garmin/dashboard")]);
   overview = data;
   todayElement.textContent = new Date(`${data.today}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   summaryElement.textContent = `${data.completed} completed · ${data.sessions.length} ahead`;
@@ -237,6 +263,7 @@ async function load() {
   renderHistory(history);
   renderProgress(progress);
   renderHealth(health);
+  renderGarmin(garmin);
   renderActivities(activities);
   activePlan = plans.plans.find(plan => plan.status === "active") || null;
   $("#adjust-plan-button").hidden = !activePlan;
@@ -331,6 +358,13 @@ $("#quick-checkin").onclick = () => openDialog(dialog);
 $("#health-checkin-button").onclick = () => openDialog(healthDialog);
 $("#health-checkin-button-secondary").onclick = () => openDialog(healthDialog);
 $("#open-health-button").onclick = () => selectView("health");
+$("#garmin-sync-now").onclick = async () => {
+  const button = $("#garmin-sync-now"); const message = $("#garmin-sync-message");
+  button.disabled = true; button.textContent = "Syncing…"; message.textContent = "Pulling your latest private Garmin data…";
+  try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = `Sync complete: ${result.activities_imported} new activities and ${result.metrics_updated} daily records.`; await load(); }
+  catch (error) { message.textContent = error.message; }
+  finally { button.textContent = "Sync now"; button.disabled = false; }
+};
 $("#build-plan-button").onclick = () => openPlanBuilder();
 $("#adjust-plan-button").onclick = () => openPlanBuilder(activePlan);
 $("#plan-form").addEventListener("submit", submitPlanDraft);
