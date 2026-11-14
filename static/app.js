@@ -1,5 +1,22 @@
 window.__healthHubBootState = "script-started";
 
+function reportStartupIssue(detail) {
+  window.__healthHubBootState = `failed: ${detail}`;
+  const diagnostic = document.getElementById("startup-diagnostic");
+  if (!diagnostic) return;
+  diagnostic.hidden = false;
+  diagnostic.textContent = `Health Hub control startup error: ${detail}`;
+}
+
+window.addEventListener("error", event => {
+  const location = event.lineno ? ` (line ${event.lineno})` : "";
+  reportStartupIssue(`${event.message || "Unknown JavaScript error"}${location}`);
+});
+window.addEventListener("unhandledrejection", event => {
+  const reason = event.reason?.message || String(event.reason || "Unknown request error");
+  reportStartupIssue(`Unhandled request: ${reason}`);
+});
+
 const $ = selector => document.querySelector(selector);
 const sessionsElement = $("#sessions");
 const todayElement = $("#today");

@@ -70,10 +70,10 @@
     <dialog id="plan-review-dialog"><div id="plan-review"></div></dialog>
     <dialog id="session-editor-dialog"><form id="session-editor-form"><button class="dialog-close" type="button" aria-label="Close">×</button><p class="eyebrow">WORKOUT CONTROL</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or mark it cancelled. Existing logged sets remain in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="9"></textarea></label><button class="secondary full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="editor-actions"><button class="danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="primary" type="submit">Save changes</button></div></form></dialog>
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-14-3" onerror="window.__healthHubBootState='script-error'"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-14-4" onerror="window.__healthHubBootState='failed: script-error'"></script>
     <script>
       setTimeout(() => {
-        if (window.__healthHubBootState === "ready") return;
+        if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;
         const diagnostic = document.getElementById("startup-diagnostic");
         diagnostic.hidden = false;
         diagnostic.textContent = window.__healthHubBootState === "script-error"
