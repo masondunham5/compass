@@ -1136,4 +1136,9 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    # The HTML document changes alongside its JavaScript.  Do not let a browser
+    # keep an old document that references controls from a different release.
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, max-age=0, must-revalidate"},
+    )
