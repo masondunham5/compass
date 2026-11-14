@@ -191,6 +191,16 @@ function renderGarminTrends(data) {
   document.querySelectorAll("[data-garmin-days]").forEach(button => button.classList.toggle("active", Number(button.dataset.garminDays) === garminDays));
 }
 
+function renderTrainingRecommendation(data) {
+  $("#rule-recommendation-title").textContent = data.title;
+  $("#rule-recommendation-score").textContent = `${data.score}/100`;
+  $("#rule-recommendation-score").className = `readiness-score ${data.mode}`;
+  $("#rule-recommendation-copy").textContent = data.guidance;
+  $("#rule-recommendation-reasons").innerHTML = data.reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join("");
+  $("#suggestion-title").textContent = data.title;
+  $("#suggestion-copy").textContent = data.guidance;
+}
+
 function renderSyncHistory(data) {
   const target = $("#garmin-sync-history");
   if (!data.syncs?.length) {
@@ -291,7 +301,7 @@ async function submitPlanDraft(event) {
 }
 
 async function load() {
-  const [data, insights, history, progress, plans, health, activities, garmin, garminHistory] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api(`/api/garmin/dashboard?days=${garminDays}`), api("/api/garmin/sync-history")]);
+  const [data, insights, history, progress, plans, health, activities, garmin, garminHistory, trainingRecommendation] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api(`/api/garmin/dashboard?days=${garminDays}`), api("/api/garmin/sync-history"), api("/api/recommendations/training")]);
   overview = data;
   todayElement.textContent = new Date(`${data.today}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   summaryElement.textContent = `${data.completed} completed · ${data.sessions.length} ahead`;
@@ -303,6 +313,7 @@ async function load() {
   renderGarmin(garmin);
   renderGarminTrends(garmin);
   renderSyncHistory(garminHistory);
+  renderTrainingRecommendation(trainingRecommendation);
   renderActivities(activities);
   activePlan = plans.plans.find(plan => plan.status === "active") || null;
   $("#adjust-plan-button").hidden = !activePlan;

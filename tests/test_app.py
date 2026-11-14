@@ -45,3 +45,23 @@ def test_garmin_csv_parser_keeps_runs_and_converts_kilometers():
 def test_normalize_activity_creates_stable_identifier():
     activity = {"activity_date": date.today().isoformat(), "activity_type": "Run", "title": "Easy run"}
     assert app.normalize_activity(activity, "demo")["id"] == app.normalize_activity(activity, "demo")["id"]
+
+
+def test_deterministic_recommendation_preserves_a_good_training_day():
+    result = app.deterministic_training_recommendation(
+        [{"id": "today", "date": date.today().isoformat(), "title": "Back & Biceps", "kind": "strength", "minutes": 60, "status": "planned", "locked": False}],
+        [{"calendar_date": date.today().isoformat(), "sleep_seconds": 7.5 * 3600, "hrv_ms": 60, "resting_hr": 52, "stress_avg": 30}],
+        {"energy": 7, "soreness": 3},
+    )
+    assert result["mode"] == "train"
+    assert result["target_session"]["id"] == "today"
+
+
+def test_deterministic_recommendation_prioritizes_recovery_when_signals_are_low():
+    result = app.deterministic_training_recommendation(
+        [{"id": "today", "date": date.today().isoformat(), "title": "Long Run", "kind": "run", "minutes": 70, "status": "planned", "locked": False}],
+        [{"calendar_date": date.today().isoformat(), "sleep_seconds": 5 * 3600, "hrv_ms": 40, "resting_hr": 65, "stress_avg": 70}, {"calendar_date": "2026-01-01", "hrv_ms": 60, "resting_hr": 52}],
+        {"energy": 3, "soreness": 8},
+    )
+    assert result["mode"] == "recovery"
+    assert result["score"] <= 50

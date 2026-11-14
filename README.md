@@ -132,6 +132,29 @@ The sync task may be run repeatedly; it upserts daily metrics and ignores
 already-imported activities. If Garmin rejects a key, Health Hub records a
 safe error message and leaves existing data unchanged.
 
+## Deterministic training recommendations
+
+Health Hub's daily training recommendation uses no AI model and never changes,
+moves, or cancels a session. It is a transparent rules engine:
+
+1. Start each day at a recovery score of **100**.
+2. Deduct points for the following signals: sleep under 7 hours (-12), sleep
+   under 6 hours (-30), HRV at least 15% below the user's rolling Garmin
+   baseline (-20), resting HR at least 8% above baseline (-15), Garmin stress
+   at least 65 (-10), soreness at least 6/10 (-8) or 8/10 (-30), and energy
+   at most 5/10 (-8) or 3/10 (-25).
+3. Choose today's planned session; if none exists, choose the next planned
+   session. A locked planned session is surfaced first but is never moved.
+4. Score 76–100: recommend the planned session. Score 51–75: recommend a
+   shortened version (about 60% of duration; no running intensity). Score
+   0–50: recommend recovery walking/mobility or rest and explicitly reject
+   catch-up volume.
+5. Display every triggered rule in the UI so the recommendation is auditable.
+
+The rolling HRV and resting-HR baselines use the available prior Garmin days
+(up to 28). With no Garmin data, the plan and manual check-in remain usable;
+the dashboard clearly indicates which recovery signals are unavailable.
+
 ### Local backup
 
 Before a major update—or whenever you want a copy of your history—create a
