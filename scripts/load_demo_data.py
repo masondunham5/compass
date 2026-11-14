@@ -65,6 +65,23 @@ def main() -> None:
                 datetime.now().astimezone().isoformat(timespec="seconds"),
             ),
         )
+        for offset in range(7):
+            day = today - timedelta(days=offset)
+            db.execute(
+                """INSERT INTO garmin_daily_metrics
+                   (calendar_date, steps, active_calories, total_calories, resting_hr, hrv_ms, sleep_seconds, stress_avg, body_battery, source_json, synced_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)""",
+                (
+                    day.isoformat(), 6200 + offset * 430, 430 + offset * 15, 2400 + offset * 20,
+                    52 + (offset % 3), 54 + (offset * 1.5), 7 * 3600 + offset * 180,
+                    28 + offset, 72 - offset, datetime.now().astimezone().isoformat(timespec="seconds"),
+                ),
+            )
+        db.execute(
+            """INSERT INTO garmin_sync_log (started_at, finished_at, status, activities_imported, metrics_updated, message)
+               VALUES (?, ?, 'success', 2, 7, 'Portfolio demo sync.')""",
+            (datetime.now().astimezone().isoformat(timespec="seconds"), datetime.now().astimezone().isoformat(timespec="seconds")),
+        )
     print("Created anonymous demo data. Start the app and open http://127.0.0.1:8765.")
 
 

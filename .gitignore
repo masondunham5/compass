@@ -1,6 +1,7 @@
 # Private local data (never commit real training or health history)
 data/*
 !data/.gitkeep
+backups/
 *.db
 *.sqlite
 *.sqlite3

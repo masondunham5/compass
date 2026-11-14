@@ -15,6 +15,7 @@ let timerSeconds = 90;
 let installPrompt = null;
 let editingSessionId = null;
 let activePlan = null;
+let garminDays = 7;
 
 async function api(path, options = {}) {
   const headers = options.body instanceof FormData ? {} : { "Content-Type": "application/json" };
@@ -163,6 +164,42 @@ function renderGarmin(data) {
     : "Not connected yet. No Garmin key is stored in this app or in GitHub.";
 }
 
+function renderTrend(chartId, labelId, records, key, format, colorClass) {
+  const chart = $(chartId);
+  const entries = [...records].reverse().filter(record => Number.isFinite(Number(record[key])));
+  if (!entries.length) {
+    chart.innerHTML = '<span class="trend-empty">Awaiting Garmin data</span>';
+    $(labelId).textContent = "—";
+    return;
+  }
+  const values = entries.map(record => Number(record[key]));
+  const minimum = Math.min(...values); const maximum = Math.max(...values);
+  const spread = Math.max(1, maximum - minimum);
+  $(labelId).textContent = format(values.reduce((sum, value) => sum + value, 0) / values.length);
+  chart.innerHTML = entries.map((record, index) => {
+    const height = values.length === 1 ? 60 : 22 + ((values[index] - minimum) / spread) * 68;
+    return `<i class="${colorClass}" style="height:${height}%" title="${escapeHtml(record.calendar_date)} · ${escapeHtml(format(values[index]))}"></i>`;
+  }).join("");
+}
+
+function renderGarminTrends(data) {
+  const records = data.records || [];
+  renderTrend("#trend-sleep-chart", "#trend-sleep-value", records, "sleep_seconds", value => `${(value / 3600).toFixed(1)} h`, "sleep");
+  renderTrend("#trend-hrv-chart", "#trend-hrv-value", records, "hrv_ms", value => `${Math.round(value)} ms`, "hrv");
+  renderTrend("#trend-rhr-chart", "#trend-rhr-value", records, "resting_hr", value => `${Math.round(value)} bpm`, "rhr");
+  renderTrend("#trend-steps-chart", "#trend-steps-value", records, "steps", value => Math.round(value).toLocaleString(), "steps");
+  document.querySelectorAll("[data-garmin-days]").forEach(button => button.classList.toggle("active", Number(button.dataset.garminDays) === garminDays));
+}
+
+function renderSyncHistory(data) {
+  const target = $("#garmin-sync-history");
+  if (!data.syncs?.length) {
+    target.innerHTML = '<div class="empty-list compact-empty"><b>No syncs yet</b><p>Your first Garmin sync will be recorded here with its activity and metric counts.</p></div>';
+    return;
+  }
+  target.innerHTML = data.syncs.map(sync => `<article class="sync-history-row"><span class="sync-status ${escapeHtml(sync.status)}">${escapeHtml(sync.status)}</span><div><b>${escapeHtml(displaySyncTime(sync.finished_at || sync.started_at))}</b><small>${sync.activities_imported} activities · ${sync.metrics_updated} metric days${sync.message ? ` · ${escapeHtml(sync.message)}` : ""}</small></div></article>`).join("");
+}
+
 function renderActivities(data) {
   importedActivities = data.activities;
   const target = $("#activity-list");
@@ -254,7 +291,7 @@ async function submitPlanDraft(event) {
 }
 
 async function load() {
-  const [data, insights, history, progress, plans, health, activities, garmin] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api("/api/garmin/dashboard")]);
+  const [data, insights, history, progress, plans, health, activities, garmin, garminHistory] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api(`/api/garmin/dashboard?days=${garminDays}`), api("/api/garmin/sync-history")]);
   overview = data;
   todayElement.textContent = new Date(`${data.today}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   summaryElement.textContent = `${data.completed} completed · ${data.sessions.length} ahead`;
@@ -264,6 +301,8 @@ async function load() {
   renderProgress(progress);
   renderHealth(health);
   renderGarmin(garmin);
+  renderGarminTrends(garmin);
+  renderSyncHistory(garminHistory);
   renderActivities(activities);
   activePlan = plans.plans.find(plan => plan.status === "active") || null;
   $("#adjust-plan-button").hidden = !activePlan;
@@ -365,6 +404,7 @@ $("#garmin-sync-now").onclick = async () => {
   catch (error) { message.textContent = error.message; }
   finally { button.textContent = "Sync now"; button.disabled = false; }
 };
+document.querySelectorAll("[data-garmin-days]").forEach(button => button.onclick = async () => { garminDays = Number(button.dataset.garminDays); await load(); });
 $("#build-plan-button").onclick = () => openPlanBuilder();
 $("#adjust-plan-button").onclick = () => openPlanBuilder(activePlan);
 $("#plan-form").addEventListener("submit", submitPlanDraft);

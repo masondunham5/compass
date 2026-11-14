@@ -638,8 +638,9 @@ def get_garmin_status() -> dict[str, Any]:
 
 
 @app.get("/api/garmin/dashboard")
-def garmin_dashboard() -> dict[str, Any]:
-    since = (date.today() - timedelta(days=6)).isoformat()
+def garmin_dashboard(days: int = 7) -> dict[str, Any]:
+    days = 30 if days >= 30 else 7
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
     with connection() as db:
         rows = db.execute(
             "SELECT * FROM garmin_daily_metrics WHERE calendar_date >= ? ORDER BY calendar_date DESC", (since,)
@@ -649,12 +650,23 @@ def garmin_dashboard() -> dict[str, Any]:
     average = lambda key: round(sum(row[key] or 0 for row in records if row[key] is not None) / max(1, sum(row[key] is not None for row in records)), 1)
     return {
         "status": garmin_status(),
+        "days": days,
         "latest": latest,
         "records": records,
         "average_sleep_hours": round(average("sleep_seconds") / 3600, 1) if any(row["sleep_seconds"] for row in records) else None,
         "average_steps": round(average("steps")) if any(row["steps"] is not None for row in records) else None,
         "average_hrv": average("hrv_ms") if any(row["hrv_ms"] is not None for row in records) else None,
     }
+
+
+@app.get("/api/garmin/sync-history")
+def garmin_sync_history() -> dict[str, Any]:
+    with connection() as db:
+        rows = db.execute(
+            "SELECT started_at, finished_at, status, activities_imported, metrics_updated, message "
+            "FROM garmin_sync_log ORDER BY id DESC LIMIT 12"
+        ).fetchall()
+    return {"syncs": [dict(row) for row in rows]}
 
 
 @app.post("/api/garmin/sync")

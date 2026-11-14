@@ -121,9 +121,28 @@ Start in: <Health Hub folder>
 Trigger: Daily, after Garmin Connect has had time to sync your watch
 ```
 
+Or, after a successful manual sync, create the same task with the included
+script (default: 11:00 PM daily):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\register_garmin_sync_task.ps1
+```
+
 The sync task may be run repeatedly; it upserts daily metrics and ignores
 already-imported activities. If Garmin rejects a key, Health Hub records a
 safe error message and leaves existing data unchanged.
+
+### Local backup
+
+Before a major update—or whenever you want a copy of your history—create a
+consistent local snapshot while Health Hub is running:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\backup_database.py
+```
+
+The result is placed in the ignored `backups/` folder. It is never uploaded or
+included in GitHub.
 
 ## Project structure
 
