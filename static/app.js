@@ -1,3 +1,5 @@
+window.__healthHubBootState = "script-started";
+
 const $ = selector => document.querySelector(selector);
 const sessionsElement = $("#sessions");
 const todayElement = $("#today");
@@ -492,4 +494,5 @@ $("#install-app").onclick = async () => {
 };
 window.addEventListener("appinstalled", () => { $("#sync").textContent = "● Installed locally"; });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/static/service-worker.js");
+window.__healthHubBootState = "ready";
 load().catch(() => { todayElement.textContent = "Could not reach your private lifting server"; $("#sync").textContent = "○ Offline"; });

@@ -9,6 +9,7 @@
     <title>Health Hub</title>
   </head>
   <body>
+    <div id="startup-diagnostic" hidden role="alert" style="position:fixed;z-index:9999;left:16px;right:16px;bottom:16px;padding:14px 16px;border:1px solid #8b5cf6;border-radius:12px;background:#201536;color:#fff;font:600 14px system-ui, sans-serif"></div>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
@@ -68,6 +69,17 @@
     <dialog id="plan-dialog"><form id="plan-form"><button class="dialog-close" type="button" value="cancel" aria-label="Close">×</button><p class="eyebrow">COLLABORATIVE BLOCK BUILDER</p><h2 id="plan-dialog-heading">Build your next block</h2><p class="muted" id="plan-dialog-copy">Start with an honest baseline. You will review every session before it becomes active.</p><label>Block name<input id="plan-name" value="Strength &amp; endurance rebuild" maxlength="80"></label><label>Goals <span>One per line, in priority order</span><textarea id="plan-goals" rows="4">Build strength&#10;Build muscle&#10;Improve running endurance</textarea></label><label>Training split<select id="plan-split"><option value="body-part-balanced">Body-part emphasis — chest/tri/shoulders and back/biceps separate</option><option value="push-pull-legs">Push / Pull / Legs</option><option value="balanced-upper-lower">Balanced upper / lower</option><option value="full-body">Full body</option></select><span id="split-help">Best for your preference: separate chest/tri/shoulders, back/biceps, and lower-body sessions.</span></label><label class="toggle-row"><input id="plan-mobility" type="checkbox"><span><b>Add a dedicated mobility/recovery session</b><small>Leave this off if mobility is not a focus for this block.</small></span></label><div class="form-grid"><label>Weeks<input id="plan-weeks" type="number" value="10" min="4" max="24"></label><label>Lift days / week<input id="plan-lifting-days" type="number" value="5" min="2" max="6"></label><label>Run days / week<input id="plan-run-days" type="number" value="3" min="0" max="5"></label><label>Starting miles / week<input id="plan-miles" type="number" value="6" min="0" max="50" step=".5"></label></div><label>Typical session time <span>minutes</span><input id="plan-minutes" type="number" value="60" min="20" max="180"></label><label>Exercises to avoid or replace<input id="plan-avoid" value="Bulgarian split squats"></label><p id="plan-form-status" class="form-status" hidden></p><button class="primary full" type="submit">Create review draft</button></form></dialog>
     <dialog id="plan-review-dialog"><div id="plan-review"></div></dialog>
     <dialog id="session-editor-dialog"><form id="session-editor-form"><button class="dialog-close" type="button" aria-label="Close">×</button><p class="eyebrow">WORKOUT CONTROL</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or mark it cancelled. Existing logged sets remain in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="9"></textarea></label><button class="secondary full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="editor-actions"><button class="danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="primary" type="submit">Save changes</button></div></form></dialog>
-    <script src="/static/app.js?v=health-hub-2026-11-14-2"></script>
+    <script>window.__healthHubBootState = "loading";</script>
+    <script src="/static/app.js?v=health-hub-2026-11-14-3" onerror="window.__healthHubBootState='script-error'"></script>
+    <script>
+      setTimeout(() => {
+        if (window.__healthHubBootState === "ready") return;
+        const diagnostic = document.getElementById("startup-diagnostic");
+        diagnostic.hidden = false;
+        diagnostic.textContent = window.__healthHubBootState === "script-error"
+          ? "Health Hub could not load its interactive app script. You are likely opening an old copy or a file:// page."
+          : "Health Hub's script started but did not finish initializing. Send a screenshot of this message so it can be repaired."
+      }, 1200);
+    </script>
   </body>
 </html>
