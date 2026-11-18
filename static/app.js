@@ -28,7 +28,6 @@ const editorDialog = $("#session-editor-dialog");
 const healthDialog = $("#health-dialog");
 let overview = null;
 let healthData = null;
-let importedActivities = [];
 let timerId = null;
 let timerSeconds = 90;
 let installPrompt = null;
@@ -61,7 +60,7 @@ function formatPace(seconds) { if (!Number.isFinite(seconds) || seconds <= 0) re
 function selectView(view) {
   document.querySelectorAll(".view").forEach(element => element.classList.toggle("active", element.id === `view-${view}`));
   document.querySelectorAll("[data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === view));
-  const titles = { plan: "Your health today", health: "Recovery & body", import: "Garmin activity import", routines: "Training plan", track: "Active workout", history: "Training history", insights: "Strength progress", settings: "Settings" };
+  const titles = { plan: "Your health today", health: "Recovery & body", routines: "Training plan", track: "Active workout", history: "Training history", insights: "Strength progress", settings: "Settings" };
   $("#page-title").textContent = titles[view] || "Health Hub";
 }
 
@@ -229,24 +228,6 @@ function renderSyncHistory(data) {
   target.innerHTML = data.syncs.map(sync => `<article class="sync-history-row"><span class="sync-status ${escapeHtml(sync.status)}">${escapeHtml(sync.status)}</span><div><b>${escapeHtml(displaySyncTime(sync.finished_at || sync.started_at))}</b><small>${sync.activities_imported} activities · ${sync.metrics_updated} metric days${sync.message ? ` · ${escapeHtml(sync.message)}` : ""}</small></div></article>`).join("");
 }
 
-function renderActivities(data) {
-  importedActivities = data.activities;
-  const target = $("#activity-list");
-  if (!data.activities.length) {
-    target.innerHTML = '<div class="empty-list"><span>↥</span><b>No Garmin activities imported</b><p>Export a run from Garmin Connect as CSV, TCX, or GPX, then import it here. You will approve any link to a planned run.</p></div>';
-    return;
-  }
-  target.innerHTML = data.activities.map(activity => `<article class="activity-card"><div><p class="eyebrow">${escapeHtml(activity.source)} · ${escapeHtml(activity.activity_type)}</p><h3>${escapeHtml(activity.title)}</h3><p>${displayDate(activity.activity_date)} · ${activity.distance_miles ? `${activity.distance_miles.toFixed(2)} mi` : "Distance unavailable"}${activity.duration_minutes ? ` · ${Math.round(activity.duration_minutes)} min` : ""}${activity.average_hr ? ` · avg HR ${activity.average_hr}` : ""}</p></div>${activity.linked_session_id ? '<span class="done">Linked to plan</span>' : '<button class="outline link-activity" data-activity-id="">Link planned run</button>'}</article>`).join("");
-  target.querySelectorAll(".link-activity").forEach((button, index) => {
-    button.onclick = async () => {
-      const activity = data.activities[index];
-      button.disabled = true; button.textContent = "Linking…";
-      try { const result = await api(`/api/activities/${encodeURIComponent(activity.id)}/link`, { method: "POST" }); $("#import-status").textContent = `Linked to ${result.session_title}.`; await load(); }
-      catch (error) { $("#import-status").textContent = error.message; button.disabled = false; button.textContent = "Link planned run"; }
-    };
-  });
-}
-
 function renderHistory(data) {
   const target = $("#history-list");
   if (!data.sessions.length) {
@@ -320,7 +301,7 @@ async function submitPlanDraft(event) {
 }
 
 async function load() {
-  const [data, insights, history, progress, plans, health, activities, garmin, garminHistory, trainingRecommendation] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api("/api/activities"), api(`/api/garmin/dashboard?days=${garminDays}`), api("/api/garmin/sync-history"), api("/api/recommendations/training")]);
+  const [data, insights, history, progress, plans, health, garmin, garminHistory, trainingRecommendation] = await Promise.all([api("/api/overview"), api("/api/insights"), api("/api/history"), api("/api/progress"), api("/api/plans"), api("/api/health/summary"), api(`/api/garmin/dashboard?days=${garminDays}`), api("/api/garmin/sync-history"), api("/api/recommendations/training")]);
   overview = data;
   todayElement.textContent = new Date(`${data.today}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   summaryElement.textContent = `${data.completed} completed · ${data.sessions.length} ahead`;
@@ -333,7 +314,6 @@ async function load() {
   renderGarminTrends(garmin);
   renderSyncHistory(garminHistory);
   renderTrainingRecommendation(trainingRecommendation);
-  renderActivities(activities);
   activePlan = plans.plans.find(plan => plan.status === "active") || null;
   $("#adjust-plan-button").hidden = !activePlan;
 }
@@ -488,20 +468,6 @@ $("#health-form").onsubmit = async event => {
     $("#suggestion-copy").textContent = result.recommendation;
   } catch (error) { alert(error.message); }
   finally { submit.disabled = false; submit.textContent = "Save health check-in"; }
-};
-$("#garmin-import-form").onsubmit = async event => {
-  event.preventDefault();
-  const file = $("#garmin-file").files[0];
-  const status = $("#import-status");
-  if (!file) { status.textContent = "Choose a CSV, TCX, or GPX activity export first."; return; }
-  const submit = event.submitter; submit.disabled = true; submit.textContent = "Importing…"; status.textContent = "Reading the export locally…";
-  try {
-    const form = new FormData(); form.append("file", file);
-    const result = await api("/api/activities/import", { method: "POST", body: form });
-    status.textContent = result.imported ? `Imported ${result.imported} run${result.imported === 1 ? "" : "s"}. Review and link one only if it matches your plan.` : "No running activities were found in that file.";
-    $("#garmin-file").value = ""; await load();
-  } catch (error) { status.textContent = error.message; }
-  finally { submit.disabled = false; submit.textContent = "Import activity"; }
 };
 document.addEventListener("keydown", event => { if (event.code === "Space" && $("#view-track").classList.contains("active")) { event.preventDefault(); timerId ? stopTimer() : startTimer(); } });
 window.addEventListener("beforeinstallprompt", event => {
