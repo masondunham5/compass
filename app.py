@@ -715,9 +715,33 @@ def garmin_dashboard(days: int = 7) -> dict[str, Any]:
         rows = db.execute(
             "SELECT * FROM garmin_daily_metrics WHERE calendar_date >= ? ORDER BY calendar_date DESC", (since,)
         ).fetchall()
+        activity_rows = db.execute(
+            """SELECT activity_date, activity_type, distance_miles, details_json
+               FROM imported_activities
+               WHERE activity_date >= ? AND lower(activity_type) LIKE '%run%'
+               ORDER BY activity_date DESC""",
+            ((date.today() - timedelta(days=27)).isoformat(),),
+        ).fetchall()
     records = [dict(row) for row in rows]
     latest = records[0] if records else None
     average = lambda key: round(sum(row[key] or 0 for row in records if row[key] is not None) / max(1, sum(row[key] is not None for row in records)), 1)
+    run_rows = [dict(row) for row in activity_rows]
+    recent_cutoff = (date.today() - timedelta(days=6)).isoformat()
+    recent_miles = round(sum(float(row["distance_miles"] or 0) for row in run_rows if row["activity_date"] >= recent_cutoff), 1)
+    baseline_miles = sum(float(row["distance_miles"] or 0) for row in run_rows) / 4
+    endurance_score = None
+    if baseline_miles > 0:
+        endurance_score = round(max(0, min(100, (recent_miles / baseline_miles) * 100)))
+    vo2_values: list[tuple[str, float]] = []
+    for row in run_rows:
+        try:
+            details = json.loads(row["details_json"] or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        value = details.get("vo2_max") if isinstance(details, dict) else None
+        if isinstance(value, (int, float)) and value > 0:
+            vo2_values.append((row["activity_date"], float(value)))
+    vo2_latest = vo2_values[0] if vo2_values else None
     return {
         "status": garmin_status(),
         "days": days,
@@ -726,6 +750,14 @@ def garmin_dashboard(days: int = 7) -> dict[str, Any]:
         "average_sleep_hours": round(average("sleep_seconds") / 3600, 1) if any(row["sleep_seconds"] for row in records) else None,
         "average_steps": round(average("steps")) if any(row["steps"] is not None for row in records) else None,
         "average_hrv": average("hrv_ms") if any(row["hrv_ms"] is not None for row in records) else None,
+        "performance": {
+            "vo2_max": round(vo2_latest[1], 1) if vo2_latest else None,
+            "vo2_max_date": vo2_latest[0] if vo2_latest else None,
+            "run_miles_7d": recent_miles,
+            "run_miles_baseline": round(baseline_miles, 1) if baseline_miles else None,
+            "endurance_score": endurance_score,
+            "run_data_days": len({row["activity_date"] for row in run_rows}),
+        },
     }
 
 
@@ -764,7 +796,33 @@ def sync_garmin_now() -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Garmin is not connected yet. Add your key to the local .env file first.")
     try:
         from garmin_sync import GarminSyncError, run_sync
-        return run_sync(days=2)
+        with connection() as db:
+            has_history = db.execute("SELECT 1 FROM garmin_daily_metrics LIMIT 1").fetchone() is not None
+        raw_days = os.getenv("GARMIN_SYNC_DAYS", "2")
+        try:
+            regular_days = max(1, min(int(raw_days), 7))
+        except ValueError:
+            regular_days = 2
+        # First successful connection gets enough context for useful trends.
+        result = run_sync(days=regular_days if has_history else 14)
+        result["days_synced"] = regular_days if has_history else 14
+        result["initial_backfill"] = not has_history
+        return result
+    except GarminSyncError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/api/garmin/backfill")
+def backfill_garmin_history() -> dict[str, Any]:
+    """Fetch a bounded 30-day history only when the user explicitly requests it."""
+    if not os.getenv("GARMIN_PERSONAL_API_KEY", "").strip():
+        raise HTTPException(status_code=400, detail="Garmin is not connected yet. Add your key to the local .env file first.")
+    try:
+        from garmin_sync import GarminSyncError, run_sync
+        result = run_sync(days=30)
+        result["days_synced"] = 30
+        result["initial_backfill"] = False
+        return result
     except GarminSyncError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
 

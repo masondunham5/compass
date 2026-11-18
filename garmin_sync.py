@@ -118,7 +118,12 @@ def activity_from_api(raw: dict[str, Any]) -> dict[str, Any] | None:
         "average_hr": _number(raw.get("averageHR") or raw.get("averageHeartRate")),
         "max_hr": _number(raw.get("maxHR") or raw.get("maxHeartRate")),
         "elevation_feet": round((_number(raw.get("elevationGain")) or 0) * 3.28084, 1) or None,
-        "details": {"garmin_activity_id": raw.get("activityId"), "start_time": start},
+        "details": {
+            "garmin_activity_id": raw.get("activityId"),
+            "start_time": start,
+            # Garmin may only include this on compatible running activities.
+            "vo2_max": _number(_walk(raw, "vO2MaxValue", "vo2MaxValue", "vo2max", "vo2Max")),
+        },
     }
     normalized = normalize_activity(candidate, "garmin-api")
     if normalized and raw.get("activityId"):
@@ -170,9 +175,14 @@ def run_sync(days: int = 2) -> dict[str, Any]:
                 if not activity:
                     continue
                 cursor = db.execute(
-                    """INSERT OR IGNORE INTO imported_activities
+                    """INSERT INTO imported_activities
                        (id, source, activity_date, activity_type, title, distance_miles, duration_minutes, average_hr, max_hr, elevation_feet, details_json, imported_at)
-                       VALUES (?, 'Garmin API', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, 'Garmin API', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(id) DO UPDATE SET
+                         source=excluded.source, activity_date=excluded.activity_date, activity_type=excluded.activity_type,
+                         title=excluded.title, distance_miles=excluded.distance_miles, duration_minutes=excluded.duration_minutes,
+                         average_hr=excluded.average_hr, max_hr=excluded.max_hr, elevation_feet=excluded.elevation_feet,
+                         details_json=excluded.details_json, imported_at=excluded.imported_at""",
                     (activity["id"], activity["activity_date"], activity["activity_type"], activity["title"], activity["distance_miles"], activity["duration_minutes"], activity["average_hr"], activity["max_hr"], activity["elevation_feet"], json.dumps(activity["details"]), started),
                 )
                 imported += int(bool(cursor.rowcount))

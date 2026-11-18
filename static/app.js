@@ -176,6 +176,7 @@ function renderGarmin(data) {
   $("#garmin-steps").textContent = data.average_steps ? Number(data.average_steps).toLocaleString() : "—";
   $("#garmin-sync-message").textContent = sync?.status === "error" ? sync.message : status.warning || "";
   $("#garmin-sync-now").disabled = !status.configured;
+  $("#garmin-backfill").disabled = !status.configured;
   $("#garmin-sync-now").title = status.configured ? "Pull the latest Garmin data" : "Add a local Garmin key in Settings first";
   $("#garmin-settings-status").textContent = status.configured
     ? `Connected locally${status.expires_on ? ` · key expiration ${status.expires_on}` : ""}${status.warning ? ` · ${status.warning}` : ""}`
@@ -205,8 +206,22 @@ function renderGarminTrends(data) {
   renderTrend("#trend-sleep-chart", "#trend-sleep-value", records, "sleep_seconds", value => `${(value / 3600).toFixed(1)} h`, "sleep");
   renderTrend("#trend-hrv-chart", "#trend-hrv-value", records, "hrv_ms", value => `${Math.round(value)} ms`, "hrv");
   renderTrend("#trend-rhr-chart", "#trend-rhr-value", records, "resting_hr", value => `${Math.round(value)} bpm`, "rhr");
+  renderTrend("#trend-battery-chart", "#trend-battery-value", records, "body_battery", value => Math.round(value), "battery");
+  renderTrend("#trend-stress-chart", "#trend-stress-value", records, "stress_avg", value => Math.round(value), "stress");
   renderTrend("#trend-steps-chart", "#trend-steps-value", records, "steps", value => Math.round(value).toLocaleString(), "steps");
   document.querySelectorAll("[data-garmin-days]").forEach(button => button.classList.toggle("active", Number(button.dataset.garminDays) === garminDays));
+}
+
+function renderPerformance(data) {
+  const performance = data.performance || {};
+  const latest = data.latest || {};
+  $("#performance-vo2").textContent = performance.vo2_max ? performance.vo2_max.toFixed(1) : "—";
+  $("#performance-vo2-note").textContent = performance.vo2_max_date ? `Garmin-reported · ${displayDate(performance.vo2_max_date)}` : "Garmin-reported when available";
+  $("#performance-endurance").textContent = performance.endurance_score === null || performance.endurance_score === undefined ? "—" : `${performance.endurance_score}/100`;
+  $("#performance-endurance-note").textContent = performance.run_miles_baseline ? `7-day mileage vs ${performance.run_miles_baseline.toFixed(1)} mi weekly baseline` : "Needs a four-week running baseline";
+  $("#performance-run-miles").textContent = `${Number(performance.run_miles_7d || 0).toFixed(1)} mi`;
+  $("#performance-run-note").textContent = performance.run_data_days ? `${performance.run_data_days} activity day${performance.run_data_days === 1 ? "" : "s"} in your recent history` : "Awaiting synced runs";
+  $("#performance-rhr").textContent = latest.resting_hr ? `${Math.round(latest.resting_hr)} bpm` : "—";
 }
 
 function renderTrainingRecommendation(data) {
@@ -312,6 +327,7 @@ async function load() {
   renderHealth(health);
   renderGarmin(garmin);
   renderGarminTrends(garmin);
+  renderPerformance(garmin);
   renderSyncHistory(garminHistory);
   renderTrainingRecommendation(trainingRecommendation);
   activePlan = plans.plans.find(plan => plan.status === "active") || null;
@@ -417,9 +433,16 @@ bindClick("#open-health-button", () => selectView("health"));
 bindClick("#garmin-sync-now", async () => {
   const button = $("#garmin-sync-now"); const message = $("#garmin-sync-message");
   button.disabled = true; button.textContent = "Syncing…"; message.textContent = "Pulling your latest private Garmin data…";
-  try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = `Sync complete: ${result.activities_imported} new activities and ${result.metrics_updated} daily records.`; await load(); }
+  try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = `${result.initial_backfill ? "Initial history" : "Sync"} complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across ${result.days_synced} days.`; await load(); }
   catch (error) { message.textContent = error.message; }
   finally { button.textContent = "Sync now"; button.disabled = false; }
+});
+bindClick("#garmin-backfill", async () => {
+  const button = $("#garmin-backfill"); const message = $("#garmin-sync-message");
+  button.disabled = true; $("#garmin-sync-now").disabled = true; button.textContent = "Backfilling…"; message.textContent = "Fetching up to 30 days of Garmin history. This can take a minute.";
+  try { const result = await api("/api/garmin/backfill", { method: "POST" }); message.textContent = `History complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across 30 days.`; await load(); }
+  catch (error) { message.textContent = error.message; }
+  finally { button.textContent = "Backfill 30 days"; button.disabled = false; $("#garmin-sync-now").disabled = false; }
 });
 document.querySelectorAll("[data-garmin-days]").forEach(button => button.onclick = async () => { garminDays = Number(button.dataset.garminDays); await load(); });
 bindClick("#build-plan-button", () => openPlanBuilder());
