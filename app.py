@@ -534,7 +534,7 @@ def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_row
     for row in rows:
         by_exercise.setdefault(row["exercise_index"], []).append(dict(row))
     exercises = []
-    for index, outline in enumerate(session.get("workout", []) or ["Main movement"]):
+    for index, outline in enumerate(session.get("workout", [])):
         name, _, prescription = outline.partition("—")
         logged = sorted(by_exercise.get(index, []), key=lambda item: item["set_number"])
         same_exercise = [dict(row) for row in previous_rows if normalize_exercise(row["exercise_name"]) == normalize_exercise(name)]
@@ -1551,6 +1551,15 @@ def exercise_catalog(q: str = "", group: str = "", limit: int = 40) -> dict[str,
     return {"groups": groups, "results": search_catalog(items, q, group, max(1, min(limit, 120)))}
 
 
+@app.get("/api/templates")
+def workout_templates() -> dict[str, Any]:
+    from catalog import RUN_TYPES
+    return {
+        "lifts": ROUTINE_DAYS,
+        "runs": [{"key": key, "label": value["label"], "structure": value["structure"]} for key, value in RUN_TYPES.items() if key != "race"],
+    }
+
+
 @app.post("/api/sessions")
 def create_session(payload: SessionCreate) -> dict[str, Any]:
     try:
@@ -1763,10 +1772,12 @@ def apply_race(race_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Race not found.")
         plan = json.loads(row["plan_json"])
         _clear_race_sessions(db, race_id)
+        # Only replace runs on dates the race plan covers (it starts on a Monday, maybe next week).
+        window_start = max(today, plan["weeks"][0]["start"]) if plan.get("weeks") else today
         replaced = db.execute(
             """DELETE FROM sessions WHERE kind = 'run' AND status = 'planned' AND locked = 0 AND session_date BETWEEN ? AND ?
                AND source NOT LIKE 'race:%' AND NOT EXISTS (SELECT 1 FROM logs l WHERE l.session_id = sessions.id)""",
-            (today, row["race_date"]),
+            (window_start, row["race_date"]),
         ).rowcount
         created = 0
         for week in plan.get("weeks", []):

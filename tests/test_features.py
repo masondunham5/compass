@@ -86,7 +86,11 @@ def test_marathon_plan_progresses_safely_and_tapers():
 
 def test_applying_a_race_replaces_block_runs_but_not_logged_ones():
     today = date.today()
-    soon = (today + timedelta(days=3)).isoformat()
+    plan_start = today + timedelta(days=(7 - today.weekday()) % 7 or 7) if today.weekday() else today
+    soon = (plan_start + timedelta(days=2)).isoformat()
+    with app.connection() as db:  # a run before the race plan starts must survive
+        if plan_start > today:
+            db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, source) VALUES ('before-plan', ?, 'run', 'Easy', 25, 'planned', 'plan:x')", (today.isoformat(),))
     with app.connection() as db:
         db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, source) VALUES ('block-run', ?, 'run', 'W1 · Easy Run', 25, 'planned', 'plan:x')", (soon,))
         db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, source, locked) VALUES ('locked-run', ?, 'run', 'Locked', 25, 'planned', 'plan:x', 1)", (soon,))
@@ -96,6 +100,7 @@ def test_applying_a_race_replaces_block_runs_but_not_logged_ones():
     with app.connection() as db:
         ids = {row[0] for row in db.execute("SELECT id FROM sessions")}
         assert "block-run" not in ids and "locked-run" in ids
+        assert plan_start == today or "before-plan" in ids
         race_runs = db.execute("SELECT COUNT(*) FROM sessions WHERE source = ?", (f"race:{race['id']}",)).fetchone()[0]
     app.apply_race(race["id"])  # re-applying must not duplicate
     with app.connection() as db:

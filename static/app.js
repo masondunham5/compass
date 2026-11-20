@@ -97,7 +97,11 @@ async function load() {
     quietly(api("/api/progress")),
     quietly(api("/api/insights")),
     quietly(api("/api/plans")),
-  ]);
+    quietly(api("/api/races")),
+  ]).then(([today, dashboard, health, syncHistory, overview, history, activities, progress, insights, plans, races]) => {
+    state.races = races;
+    return [today, dashboard, health, syncHistory, overview, history, activities, progress, insights, plans];
+  });
   Object.assign(state, { today, dashboard, health, syncHistory, overview, history, activities, progress, insights, plans });
   activePlan = plans?.plans?.find(plan => plan.status === "active") || null;
   if (!state.selectedDay || !today.week.some(day => day.date === state.selectedDay)) state.selectedDay = today.today;
@@ -148,7 +152,10 @@ function linesHtml(lines, changed = false) {
 
 function runLinesHtml(session, minutes) {
   const miles = runMiles(session);
-  return `<ul class="lines"><li><span>Distance</span><span>${miles ? `${miles} mi` : "By feel"}</span></li><li class="${minutes !== session.minutes ? "changed" : ""}"><span>Time</span><span>${minutes} min</span></li><li><span>Effort</span><span>Easy, conversational</span></li></ul>`;
+  const pace = (String(session.description || "").match(/~(\d+:\d{2})\/mi/) || [])[1];
+  const easyType = /easy|recovery|long|strides/i.test(session.title || "");
+  const effort = pace ? ["Pace", `~${pace}/mi`] : ["Effort", easyType ? "Easy, conversational" : (session.workout || [])[1] || "By feel"];
+  return `<ul class="lines"><li><span>Distance</span><span>${miles ? `${miles} mi` : "By feel"}</span></li><li class="${minutes !== session.minutes ? "changed" : ""}"><span>Time</span><span>${minutes} min</span></li><li><span>${effort[0]}</span><span>${esc(effort[1])}</span></li></ul>`;
 }
 
 function renderTodayCard(t) {
@@ -418,6 +425,7 @@ function renderTrain() {
     : `<article class="card empty"><b>No history yet</b>Finished workouts and Garmin activities show up here.</article>`;
   $$("#train-history [data-review]").forEach(button => button.onclick = () => openSession(button.dataset.review));
 
+  renderRaces();
   $$("[data-train-tab]").forEach(button => button.classList.toggle("active", button.dataset.trainTab === state.trainTab));
   $("#train-plan").hidden = state.trainTab !== "plan";
   $("#train-history").hidden = state.trainTab !== "history";
@@ -436,11 +444,13 @@ function openSessionSheet(session) {
     <p class="muted">${esc(sessionMeta(session))}${session.status !== "planned" ? ` · ${esc(titleCase(session.status))}` : ""}</p>
     ${lines}
     ${planned || session.status === "completed" ? `<button class="btn btn-primary full" type="button" id="sheet-start">${session.status === "completed" ? "Review workout" : session.kind === "run" ? "Start run" : "Start workout"}</button>` : ""}
-    <div class="sheet-actions"><button class="btn btn-ghost" type="button" id="sheet-edit">Edit</button><button class="btn btn-ghost" type="button" id="sheet-lock">${session.locked ? "Unlock" : "Lock"}</button></div>
+    <div class="sheet-actions">${session.kind === "run" && planned ? `<button class="btn btn-ghost" type="button" id="sheet-change-run">Change run</button>` : ""}<button class="btn btn-ghost" type="button" id="sheet-edit">${session.kind === "run" ? "Move / notes" : "Edit"}</button><button class="btn btn-ghost" type="button" id="sheet-lock">${session.locked ? "Unlock" : "Lock"}</button></div>
     <p class="faint">Locked sessions are never moved when you adjust the block.</p>`;
   sheet.querySelector(".sheet-close").onclick = () => sheet.close();
   const start = $("#sheet-start"); if (start) start.onclick = () => { sheet.close(); openSession(session.id); };
   $("#sheet-edit").onclick = () => { sheet.close(); openSessionEditor(session); };
+  const changeRun = $("#sheet-change-run");
+  if (changeRun) changeRun.onclick = () => { sheet.close(); openRunEditor(session, null); };
   $("#sheet-lock").onclick = async () => { await api(`/api/sessions/${encodeURIComponent(session.id)}/lock`, { method: "POST" }); sheet.close(); await load(); };
   openDialog(sheet);
 }
@@ -455,7 +465,7 @@ function startTimer() { stopTimer(); timerSeconds = 90; updateTimer(); timerId =
 function setRow(exercise, setNumber, logged) {
   const weight = logged?.weight ?? exercise.suggested_weight ?? "";
   const reps = logged?.reps ?? exercise.suggested_reps ?? "";
-  return `<div class="set-row" data-exercise-index="${exercise.index}" data-set-number="${setNumber}"><span>${setNumber}</span><input aria-label="Weight, set ${setNumber}" type="number" inputmode="decimal" value="${weight}" min="0" step="2.5" placeholder="lb"><input aria-label="Reps, set ${setNumber}" type="number" inputmode="numeric" value="${reps}" min="0" placeholder="${esc(exercise.target_reps)}"><input aria-label="RPE, set ${setNumber}" type="number" inputmode="decimal" value="${logged?.rpe ?? ""}" min="1" max="10" step=".5" placeholder="RPE"><button class="add-weight" type="button" aria-label="Add 5 lb">+5</button><button class="set-check ${logged ? "logged" : ""}" type="button">${logged ? "✓" : "Log"}</button></div>`;
+  return `<div class="set-row" data-exercise-index="${exercise.index}" data-set-number="${setNumber}"><span>${setNumber}</span><input aria-label="Weight, set ${setNumber}" type="number" inputmode="decimal" value="${weight}" min="0" step="any" placeholder="lb"><input aria-label="Reps, set ${setNumber}" type="number" inputmode="numeric" value="${reps}" min="0" placeholder="${esc(exercise.target_reps)}"><input aria-label="RPE, set ${setNumber}" type="number" inputmode="decimal" value="${logged?.rpe ?? ""}" min="1" max="10" step=".5" placeholder="RPE"><button class="add-weight" type="button" aria-label="Add 5 lb">+5</button><button class="set-check ${logged ? "logged" : ""}" type="button">${logged ? "✓" : "Log"}</button></div>`;
 }
 
 function updateWorkoutProgress() {
@@ -476,10 +486,13 @@ async function openSession(sessionId, options = {}) {
 
   if (session.kind === "run") {
     const miles = runMiles(session);
-    target.innerHTML = `${header}<article class="card"><p class="kicker">Target</p><h2>${miles ? `${miles.toFixed(1)} mi easy` : "Run by easy effort"}</h2><p class="muted">${esc(session.description || "Keep the effort conversational.")}</p></article>${done
+    const structure = (session.workout || []).filter(line => !/^Record distance/i.test(line));
+    target.innerHTML = `${header}<article class="card"><p class="kicker">Target</p><h2>${miles ? `${miles.toFixed(1)} mi · ${esc(cleanTitle(session.title))}` : esc(cleanTitle(session.title))}</h2><p class="muted">${esc(session.description || "Keep the effort conversational.")}</p>${structure.length ? `<ul class="reason-list">${structure.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}${done ? "" : `<button class="btn btn-ghost full" type="button" id="change-run" style="margin-top:14px">Change run</button>`}</article>${done
       ? `<article class="card empty"><b>This run is logged</b>Find it under Train → History.</article>`
       : `<form id="run-log-form" class="card stack"><div class="run-fields"><label>Distance <span>miles</span><input id="run-distance" type="number" inputmode="decimal" min=".1" step=".01" value="${miles || ""}" required></label><label>Time <span>minutes</span><input id="run-duration" type="number" inputmode="decimal" min="1" step=".1" required></label><label>Average HR <span>optional</span><input id="run-average-hr" type="number" inputmode="numeric" min="30" max="260"></label><label>Max HR <span>optional</span><input id="run-max-hr" type="number" inputmode="numeric" min="30" max="260"></label></div><label>Effort <span>1 easy — 10 maximal</span><input id="run-effort" type="number" min="1" max="10" value="5" required></label><div class="pace"><span>PACE</span><b id="run-pace">—</b></div><label>Notes <textarea id="run-notes" rows="3" placeholder="How did it feel?"></textarea></label><button class="btn btn-primary full" type="submit">Log run &amp; finish</button></form>`}`;
     $("#workout-back").onclick = () => selectView(back);
+    const change = $("#change-run");
+    if (change) change.onclick = () => openRunEditor(session, () => openSession(session.id, options));
     const form = $("#run-log-form");
     if (!form) return;
     const updatePace = () => { $("#run-pace").textContent = formatPace(Number($("#run-duration").value) * 60 / Number($("#run-distance").value)); };
@@ -496,13 +509,24 @@ async function openSession(sessionId, options = {}) {
     return;
   }
 
+  state.workout = { id: session.id, options, session };
   const exercises = session.exercises.map(exercise => {
     const loggedCount = Math.max(0, ...(exercise.sets || []).map(set => set.set_number));
     const count = Math.max(options.cap ? Math.min(exercise.target_sets, options.cap) : exercise.target_sets, loggedCount);
-    return `<article class="card exercise"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · ${esc(exercise.starting_guide)}</p></div><span class="last">${exercise.suggested_weight ? `Last ${exercise.suggested_weight} × ${exercise.suggested_reps}` : "No baseline"}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div></article>`;
+    const last = exercise.target_weight ? `<span class="target-chip">Target ${exercise.target_weight} lb</span>` : exercise.suggested_weight ? `Last ${exercise.suggested_weight} × ${exercise.suggested_reps}` : "No baseline";
+    const tools = done ? "" : `<div class="exercise-tools"><button type="button" data-tool="add-set">+ Set</button><button type="button" data-tool="edit">Edit</button><button type="button" data-tool="swap">Swap</button><button type="button" data-tool="remove" class="danger">Remove</button></div>`;
+    return `<article class="card exercise" data-index="${exercise.index}"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · ${esc(exercise.starting_guide)}</p></div><span class="last">${last}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div>${tools}</article>`;
   }).join("");
-  target.innerHTML = `${header}<div class="workout-progress"><i></i></div>${exercises}<div class="rest-bar"><button class="timer" type="button" id="timer-toggle"><b id="rest-clock">01:30</b><span>Rest</span></button>${done ? "" : '<button class="btn btn-primary" type="button" id="finish-session">Finish workout</button>'}</div>`;
+  const addButton = done ? "" : `<button class="btn btn-ghost full add-exercise" type="button" id="add-exercise">${icon("plus")}Add exercise</button>`;
+  target.innerHTML = `${header}<div class="workout-progress"><i></i></div>${exercises}${addButton}<div class="rest-bar"><button class="timer" type="button" id="timer-toggle"><b id="rest-clock">01:30</b><span>Rest</span></button>${done ? "" : '<button class="btn btn-primary" type="button" id="finish-session">Finish workout</button>'}</div>`;
   $("#workout-back").onclick = () => { stopTimer(); selectView(back); };
+  const add = $("#add-exercise");
+  if (add) add.onclick = () => openCatalog({ title: "Add exercise", onPick: item => openExerciseConfig(item, { mode: "add" }) });
+  target.querySelectorAll(".exercise").forEach(card => {
+    const index = Number(card.dataset.index);
+    const exercise = session.exercises.find(item => item.index === index);
+    card.querySelectorAll("[data-tool]").forEach(button => button.onclick = () => exerciseTool(button.dataset.tool, exercise));
+  });
   $("#timer-toggle").onclick = () => (timerId ? stopTimer() : startTimer());
   target.querySelectorAll(".set-row").forEach(row => {
     const inputs = row.querySelectorAll("input");
@@ -520,6 +544,297 @@ async function openSession(sessionId, options = {}) {
     await api(`/api/sessions/${encodeURIComponent(session.id)}/complete`, { method: "POST", body: JSON.stringify({ minutes, notes: options.cap ? `Short version: ${options.cap} sets per exercise` : "Logged in Health Hub", metrics: options.cap ? { capped_sets: options.cap } : {} }) });
     stopTimer(); state.fullSession = false; await load(); selectView(back);
   };
+}
+
+/* ---------------------------------------------------------------- On-the-fly editing */
+
+const refreshWorkout = () => openSession(state.workout.id, state.workout.options);
+
+async function exerciseTool(tool, exercise) {
+  const sid = encodeURIComponent(state.workout.id);
+  try {
+    if (tool === "add-set") {
+      await api(`/api/sessions/${sid}/exercises/${exercise.index}`, { method: "PATCH", body: JSON.stringify({ sets: Math.min(12, displayedSets(exercise) + 1) }) });
+      if (state.workout.options.cap) state.workout.options = { ...state.workout.options, cap: null };
+      await refreshWorkout();
+    } else if (tool === "edit") {
+      openExerciseConfig({ name: exercise.name, last_weight: exercise.suggested_weight, last_reps: exercise.suggested_reps }, { mode: "edit", exercise });
+    } else if (tool === "swap") {
+      if (exercise.sets?.length) { alert("Sets are already logged for this exercise. Add the new exercise instead."); return; }
+      openCatalog({ title: `Swap ${exercise.name}`, onPick: item => openExerciseConfig(item, { mode: "swap", exercise }) });
+    } else if (tool === "remove") {
+      const logged = exercise.sets?.length ? ` and its ${exercise.sets.length} logged set${exercise.sets.length === 1 ? "" : "s"}` : "";
+      if (!confirm(`Remove ${exercise.name}${logged} from this workout?`)) return;
+      await api(`/api/sessions/${sid}/exercises/${exercise.index}`, { method: "DELETE" });
+      await refreshWorkout();
+    }
+  } catch (error) { alert(error.message); }
+}
+const displayedSets = exercise => Math.max(state.workout.options.cap ? Math.min(exercise.target_sets, state.workout.options.cap) : exercise.target_sets, ...(exercise.sets || []).map(set => set.set_number), 0);
+
+let catalogState = { query: "", group: "", onPick: null, timer: null };
+
+function openCatalog({ title = "Add exercise", onPick }) {
+  catalogState = { query: "", group: "", onPick, timer: null };
+  $("#catalog-kicker").textContent = title;
+  $("#catalog-search").value = "";
+  openDialog($("#catalog-sheet"));
+  renderCatalog();
+  setTimeout(() => $("#catalog-search").focus(), 50);
+}
+
+async function renderCatalog() {
+  const { query, group } = catalogState;
+  const data = await api(`/api/exercises/catalog?q=${encodeURIComponent(query)}&group=${encodeURIComponent(group)}&limit=60`);
+  $("#catalog-groups").innerHTML = ["", ...data.groups].map(name => `<button type="button" class="chip${name === group ? " active" : ""}" data-group="${esc(name)}">${esc(name || "All")}</button>`).join("");
+  $$("#catalog-groups .chip").forEach(chip => chip.onclick = () => { catalogState.group = chip.dataset.group; renderCatalog(); });
+  const custom = query.trim().length >= 3 && !data.results.some(item => item.name.toLowerCase() === query.trim().toLowerCase())
+    ? `<button type="button" class="row-item custom-add" data-custom="1"><div class="grow"><b>+ Add “${esc(query.trim())}”</b><small>Not in the catalog — add it as a new exercise</small></div></button>` : "";
+  $("#catalog-results").innerHTML = (data.results.map((item, index) => `<button type="button" class="row-item" data-pick="${index}"><div class="grow"><b>${esc(item.name)}</b><small>${esc([item.group, item.equipment].filter(Boolean).join(" · "))}${item.times ? ` · done ${item.times}×` : ""}</small></div><span class="end">${item.last_weight != null ? `${item.last_weight} × ${item.last_reps}` : ""}</span></button>`).join("") + custom)
+    || `<div class="empty"><b>No matches</b>Try a different word.</div>`;
+  $$("#catalog-results [data-pick]").forEach(row => row.onclick = () => { $("#catalog-sheet").close(); catalogState.onPick(data.results[Number(row.dataset.pick)]); });
+  const customRow = $("#catalog-results [data-custom]");
+  if (customRow) customRow.onclick = () => { $("#catalog-sheet").close(); catalogState.onPick({ name: titleCase(query.trim()), default_sets: 3, default_reps: "8–12" }); };
+}
+
+let configState = null;
+
+function openExerciseConfig(item, { mode, exercise = null }) {
+  configState = { item, mode, exercise };
+  const labels = { add: ["Add to workout", "Add exercise"], swap: [`Swap for ${exercise?.name || ""}`, "Swap exercise"], edit: ["Edit exercise", "Save"] };
+  $("#config-kicker").textContent = labels[mode][0];
+  $("#config-submit").textContent = labels[mode][1];
+  $("#config-name").textContent = item.name;
+  $("#config-last").textContent = item.last_weight != null ? `Last time: ${item.last_weight} lb × ${item.last_reps}` : "No history yet — pick a weight that leaves 2–3 reps in reserve.";
+  $("#config-sets").value = exercise ? displayedSets(exercise) || exercise.target_sets : item.default_sets || 3;
+  $("#config-reps").value = exercise ? exercise.target_reps : item.default_reps || "8–12";
+  $("#config-weight").value = exercise?.target_weight ?? "";
+  openDialog($("#exercise-config"));
+}
+
+async function submitExerciseConfig(event) {
+  event.preventDefault();
+  const { item, mode, exercise } = configState;
+  const sid = encodeURIComponent(state.workout.id);
+  const weight = $("#config-weight").value ? Number($("#config-weight").value) : null;
+  const body = { sets: Number($("#config-sets").value), reps: $("#config-reps").value.trim() };
+  try {
+    if (mode === "edit") {
+      await api(`/api/sessions/${sid}/exercises/${exercise.index}`, { method: "PATCH", body: JSON.stringify({ ...body, weight, clear_weight: weight === null }) });
+    } else {
+      await api(`/api/sessions/${sid}/exercises`, { method: "POST", body: JSON.stringify({ ...body, name: item.name, weight, replace_index: mode === "swap" ? exercise.index : null }) });
+    }
+    $("#exercise-config").close();
+    if (state.workout.options.cap) state.workout.options = { ...state.workout.options, cap: null };  // explicit edits win over the short-day cap
+    await refreshWorkout();
+  } catch (error) { alert(error.message); }
+}
+
+/* New workout (lift from a template or empty; run from a run type) */
+
+let newWorkoutKind = "strength";
+let templates = null;
+
+async function openNewWorkout(day = state.today?.today) {
+  templates = templates || await api("/api/templates");
+  newWorkoutKind = "strength";
+  $("#new-date").value = day;
+  renderNewWorkoutTemplates();
+  openDialog($("#new-workout-dialog"));
+}
+
+function renderNewWorkoutTemplates() {
+  $$("#new-kind [data-kind]").forEach(button => button.classList.toggle("active", button.dataset.kind === newWorkoutKind));
+  const options = newWorkoutKind === "strength"
+    ? [...Object.keys(templates.lifts), "Empty workout"]
+    : templates.runs.map(run => run.label);
+  const current = $("#new-title").value;
+  if (!options.includes(current)) $("#new-title").value = options[0];
+  $("#new-templates").innerHTML = options.map(name => `<button type="button" class="chip${name === $("#new-title").value ? " active" : ""}">${esc(name)}</button>`).join("");
+  $$("#new-templates .chip").forEach(chip => chip.onclick = () => { $("#new-title").value = chip.textContent; renderNewWorkoutTemplates(); });
+}
+
+async function submitNewWorkout(event) {
+  event.preventDefault();
+  const title = $("#new-title").value.trim();
+  const day = $("#new-date").value;
+  let payload;
+  if (newWorkoutKind === "strength") {
+    const lines = templates.lifts[title] || [];
+    payload = { session_date: day, kind: "strength", title: title === "Empty workout" ? "Workout" : title, minutes: 60, workout: lines };
+  } else {
+    const run = templates.runs.find(item => item.label === title) || templates.runs[0];
+    payload = { session_date: day, kind: "run", title: run.label, minutes: 35, description: `${run.label} · target 3 mi`, workout: run.structure };
+  }
+  try {
+    const session = await api("/api/sessions", { method: "POST", body: JSON.stringify(payload) });
+    $("#new-workout-dialog").close();
+    await load();
+    await openSession(session.id);
+    if (newWorkoutKind === "strength" && !payload.workout.length) openCatalog({ title: "Add your first exercise", onPick: item => openExerciseConfig(item, { mode: "add" }) });
+    if (newWorkoutKind === "run") openRunEditor(session, () => openSession(session.id));
+  } catch (error) { alert(error.message); }
+}
+
+/* Run editor */
+
+let runEditor = null;
+
+async function openRunEditor(session, after) {
+  const data = state.runTypes || (state.runTypes = await api("/api/run-types"));
+  const miles = runMiles(session) || 3;
+  const currentLabel = cleanTitle(session.title).toLowerCase();
+  const type = data.types.find(item => item.label.toLowerCase() === currentLabel) || data.types.find(item => currentLabel.includes(item.key.replace("_", " "))) || data.types[0];
+  runEditor = { session, after, type: type.key, types: data.types };
+  $("#run-edit-miles").value = miles;
+  $("#run-edit-minutes").value = session.minutes || 30;
+  renderRunEditor();
+  openDialog($("#run-editor"));
+}
+
+function paceSeconds(text) { if (!text) return null; const [m, s] = text.split(":").map(Number); return m * 60 + s; }
+
+function renderRunEditor(updateMinutes = false) {
+  const type = runEditor.types.find(item => item.key === runEditor.type);
+  $("#run-type-chips").innerHTML = runEditor.types.filter(item => item.key !== "race").map(item => `<button type="button" class="chip${item.key === type.key ? " active" : ""}" data-type="${item.key}">${esc(item.label)}</button>`).join("");
+  $$("#run-type-chips .chip").forEach(chip => chip.onclick = () => { runEditor.type = chip.dataset.type; renderRunEditor(true); });
+  $("#run-type-structure").textContent = type.structure.join(" · ");
+  const pace = paceSeconds(type.pace_text);
+  if (updateMinutes && pace) $("#run-edit-minutes").value = Math.round((Number($("#run-edit-miles").value) || 3) * pace / 60);
+  $("#run-edit-pace").textContent = type.pace_text ? `Suggested pace ~${type.pace_text}/mi, from your recent Garmin runs.` : "Run by effort; pace suggestions appear after a few Garmin runs.";
+}
+
+async function submitRunEditor(event) {
+  event.preventDefault();
+  const type = runEditor.types.find(item => item.key === runEditor.type);
+  const miles = Number($("#run-edit-miles").value);
+  const phase = (String(runEditor.session.description || "").match(/^(\w[\w ]*):/) || [])[1];
+  const week = (String(runEditor.session.title).match(/^(W\d+)\s*·/) || [])[1];
+  const payload = {
+    title: week ? `${week} · ${type.label}` : type.label,
+    minutes: Number($("#run-edit-minutes").value),
+    description: `${phase ? `${phase}: ` : ""}${type.label.toLowerCase()} · target ${miles} mi${type.pace_text ? ` · ~${type.pace_text}/mi` : ""}`,
+    workout: type.structure,
+  };
+  try {
+    await api(`/api/sessions/${encodeURIComponent(runEditor.session.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+    $("#run-editor").close();
+    await load();
+    if (runEditor.after) await runEditor.after();
+  } catch (error) { alert(error.message); }
+}
+
+/* Races */
+
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const PHASE_COLORS = { Base: "#3d3a5c", Build: "var(--stage-light)", Peak: "var(--stage-deep)", Taper: "var(--stage-rem)", "Race week": "var(--stage-rem)" };
+let editingRace = null;
+
+function renderRaces() {
+  const races = state.races?.races || [];
+  $("#race-list").innerHTML = races.length ? races.map(race => {
+    const week = race.current_week;
+    const status = week ? `Week ${week.index} of ${race.plan.summary.total_weeks} · ${week.phase} · ${week.miles} mi this week` : race.days_to_go < 0 ? "Finished" : `Plan starts ${fmtShort(race.plan.weeks[0].start)}`;
+    return `<button type="button" class="card race-card" data-race="${esc(race.id)}"><div class="race-top"><h3>${esc(race.name)}</h3><span class="countdown">${race.days_to_go >= 0 ? `${race.days_to_go} days` : "Done"}</span></div><p>${esc(race.plan.distance_label)} · ${esc(fmtLong(race.race_date))}${race.plan.summary.goal ? ` · goal ${esc(race.plan.summary.goal)}` : ""}</p><p>${esc(status)}${race.applied_at ? "" : " · not on calendar yet"}</p></button>`;
+  }).join("") : `<article class="card empty"><b>No races yet</b>Plan a race and Health Hub builds the weeks between now and race day.</article>`;
+  $$("#race-list [data-race]").forEach(card => card.onclick = () => openRaceSheet(races.find(race => race.id === card.dataset.race)));
+}
+
+function mileageChart(plan, todayIso) {
+  const max = Math.max(...plan.weeks.map(week => week.miles), 1);
+  return `<div class="mileage-chart" role="img" aria-label="Weekly mileage">${plan.weeks.map(week => {
+    const isNow = week.start <= todayIso && todayIso < new Date(asDate(week.start).getTime() + 7 * 86400000).toISOString().slice(0, 10);
+    return `<i class="${esc(week.phase.split(" ")[0])}${isNow ? " now" : ""}" style="height:${Math.max(4, (week.miles / max) * 100)}%" title="Week ${week.index} · ${esc(week.phase)} · ${week.miles} mi · long ${week.long} mi"></i>`;
+  }).join("")}</div><div class="phase-legend">${plan.phases.map(phase => `<span style="--c:${PHASE_COLORS[phase.name]}">${esc(phase.name)} · ${phase.weeks} wk</span>`).join("")}</div>`;
+}
+
+function planSummaryHtml(plan) {
+  const s = plan.summary;
+  const paces = s.paces ? `<div class="pace-grid">${[["Easy", s.paces.easy], ["Long", s.paces.long], ["Race", s.paces.race], ["Tempo", s.paces.tempo], ["Intervals", s.paces.interval], ["Recovery", s.paces.recovery]].map(([label, value]) => `<div><span>${label}</span><b>${esc(value)}/mi</b></div>`).join("")}</div>` : "";
+  return `<p class="muted">${s.total_weeks} weeks · ${s.start_miles} → ${s.peak_miles} mi/week · longest run ${s.longest_run} mi · runs ${esc(s.run_days.join(", "))}, long run ${esc(s.long_run_day)}</p>${mileageChart(plan, state.today.today)}${paces}`;
+}
+
+function raceWeekHtml(week, label) {
+  if (!week) return "";
+  return `<div class="race-week"><h4>${esc(label)} <span>${esc(week.phase)}${week.cutback ? " · cutback" : ""} · ${week.miles} mi</span></h4><ul>${week.runs.map(run => `<li><span>${esc(fmtDow(run.date))} · ${esc(run.title)}</span><span>${run.miles} mi</span></li>`).join("") || "<li><span>No runs left this week</span></li>"}</ul></div>`;
+}
+
+function openRaceSheet(race) {
+  const sheet = $("#race-sheet");
+  const todayIso = state.today.today;
+  const weeks = race.plan.weeks;
+  const currentIndex = Math.max(0, weeks.findIndex(week => week.runs.some(run => run.date >= todayIso)));
+  $("#race-sheet-body").innerHTML = `<button class="sheet-close" type="button" aria-label="Close">${icon("close")}</button>
+    <p class="kicker">${esc(race.plan.distance_label)} · ${esc(fmtLong(race.race_date))} · ${race.days_to_go} days</p><h2>${esc(race.name)}</h2>
+    ${planSummaryHtml(race.plan)}
+    ${raceWeekHtml(weeks[currentIndex], currentIndex === 0 && weeks[0].start > todayIso ? "First week" : "This week")}
+    ${raceWeekHtml(weeks[currentIndex + 1], "Next week")}
+    <p class="note">${race.applied_at ? "This plan is on your calendar. Editing it updates future runs." : "Not on your calendar yet. Adding it replaces the block's planned runs through race day; completed and locked runs stay."}</p>
+    ${race.applied_at ? "" : `<button class="btn btn-primary full" type="button" id="race-apply">Add runs to calendar</button>`}
+    <div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-edit">Edit plan</button><button class="btn btn-danger" type="button" id="race-delete">Delete</button></div>`;
+  sheet.querySelector(".sheet-close").onclick = () => sheet.close();
+  const apply = $("#race-apply");
+  if (apply) apply.onclick = async () => {
+    apply.disabled = true; apply.textContent = "Adding runs…";
+    try { const result = await api(`/api/races/${encodeURIComponent(race.id)}/apply`, { method: "POST" }); sheet.close(); await load(); alert(`Added ${result.runs_created} runs through race day${result.runs_replaced ? ` and replaced ${result.runs_replaced} generic block runs` : ""}.`); }
+    catch (error) { alert(error.message); apply.disabled = false; apply.textContent = "Add runs to calendar"; }
+  };
+  $("#race-edit").onclick = () => { sheet.close(); openRaceDialog(race); };
+  $("#race-delete").onclick = async () => {
+    if (!confirm(`Delete ${race.name} and remove its planned runs from your calendar? Completed runs stay.`)) return;
+    await api(`/api/races/${encodeURIComponent(race.id)}`, { method: "DELETE" }); sheet.close(); await load();
+  };
+  openDialog(sheet);
+}
+
+function openRaceDialog(race = null) {
+  editingRace = race;
+  const settings = race?.settings || {};
+  const nextFall = new Date(asDate(state.today.today).getFullYear() + 1, 9, 10);
+  $("#race-dialog-title").textContent = race ? "Edit race plan" : "Plan a race";
+  $("#race-name").value = settings.name || "Fall Marathon";
+  $("#race-date").value = settings.race_date || nextFall.toISOString().slice(0, 10);
+  $("#race-distance").value = settings.distance || "marathon";
+  $("#race-goal").value = settings.goal_time || "";
+  $("#race-peak").value = settings.peak_miles || "";
+  $("#race-current").value = settings.current_weekly_miles ?? state.races?.weekly_miles ?? "";
+  const days = settings.run_days || [1, 2, 5, 6];
+  $("#race-days").innerHTML = WEEKDAY_NAMES.map((name, index) => `<label>${name}<input type="checkbox" value="${index}"${days.includes(index) ? " checked" : ""}></label>`).join("");
+  $("#race-long-day").value = String(settings.long_run_day ?? 6);
+  $("#race-preview").hidden = true;
+  $("#race-form-status").hidden = true;
+  $("#race-save").textContent = race ? "Save changes" : "Save plan";
+  openDialog($("#race-dialog"));
+}
+
+function readRaceForm() {
+  return {
+    name: $("#race-name").value.trim(), race_date: $("#race-date").value, distance: $("#race-distance").value,
+    goal_time: $("#race-goal").value.trim() || null, peak_miles: $("#race-peak").value ? Number($("#race-peak").value) : null,
+    current_weekly_miles: $("#race-current").value === "" ? null : Number($("#race-current").value),
+    run_days: $$("#race-days input:checked").map(input => Number(input.value)), long_run_day: Number($("#race-long-day").value),
+  };
+}
+
+async function previewRace() {
+  const status = $("#race-form-status");
+  try {
+    const { plan } = await api("/api/races/preview", { method: "POST", body: JSON.stringify(readRaceForm()) });
+    status.hidden = true;
+    $("#race-preview").hidden = false;
+    $("#race-preview").innerHTML = planSummaryHtml(plan);
+  } catch (error) { status.textContent = error.message; status.hidden = false; }
+}
+
+async function saveRace(event) {
+  event.preventDefault();
+  const status = $("#race-form-status");
+  try {
+    const race = await api(editingRace ? `/api/races/${encodeURIComponent(editingRace.id)}` : "/api/races", { method: editingRace ? "PUT" : "POST", body: JSON.stringify(readRaceForm()) });
+    $("#race-dialog").close();
+    await load();
+    openRaceSheet(state.races.races.find(item => item.id === race.id) || race);
+  } catch (error) { status.textContent = error.message; status.hidden = false; }
 }
 
 /* ---------------------------------------------------------------- Progress + settings */
@@ -686,6 +1001,20 @@ $$("dialog.sheet").forEach(dialog => {
   dialog.querySelectorAll("form > .sheet-close").forEach(button => button.onclick = () => dialog.close());
 });
 
+$("#new-workout").onclick = () => openNewWorkout();
+$$("#new-kind [data-kind]").forEach(button => button.onclick = () => { newWorkoutKind = button.dataset.kind; $("#new-title").value = ""; renderNewWorkoutTemplates(); });
+$("#new-workout-form").addEventListener("submit", submitNewWorkout);
+$("#catalog-search").addEventListener("input", event => {
+  clearTimeout(catalogState.timer);
+  catalogState.timer = setTimeout(() => { catalogState.query = event.target.value; renderCatalog(); }, 150);
+});
+$("#catalog-sheet .sheet-close").onclick = () => $("#catalog-sheet").close();
+$("#exercise-config-form").addEventListener("submit", submitExerciseConfig);
+$("#run-editor-form").addEventListener("submit", submitRunEditor);
+$("#run-edit-miles").addEventListener("input", () => renderRunEditor(true));
+$("#plan-race").onclick = () => openRaceDialog();
+$("#race-form").addEventListener("submit", saveRace);
+$("#race-preview-btn").onclick = previewRace;
 $("#plan-form").addEventListener("submit", submitPlanDraft);
 $("#plan-split").onchange = event => { $("#split-help").textContent = SPLIT_HELP[event.target.value]; };
 $("#session-editor-form").addEventListener("submit", saveSessionEditor);
