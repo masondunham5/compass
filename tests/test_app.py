@@ -72,6 +72,16 @@ def test_short_day_keeps_every_lift_at_two_sets():
     assert [(line["name"], line["sets"], line["reps"]) for line in lines] == [("Dumbbell Bench Press", 2, "8–12"), ("Cable Fly", 1, "15"), ("Easy effort", None, None)]
 
 
+def test_exercise_aliases_use_logged_names():
+    assert app.canonical_workout_line("Triceps Pressdown — 3 × 10–15") == "Rope Pushdown — 3 × 10–15"
+    assert app.canonical_workout_line("Pull-up or Lat Pulldown — 4 × 6–10") == "Lat Pulldown — 4 × 6–10"
+    assert app.canonical_workout_line("Barbell Bench Press — 4 × 5–8") == "Barbell Bench Press — 4 × 5–8"
+    assert app.normalize_exercise("Cable Chest Fly") == app.normalize_exercise("cable  fly")
+    draft = app.build_draft(app.BlockDraftRequest())
+    lines = [line for session in draft["sessions"] for line in session["workout"]]
+    assert not any(line.startswith(("Triceps Pressdown", "Overhead Press ", "Pull-up or Lat Pulldown")) for line in lines)
+
+
 def test_deterministic_recommendation_prioritizes_recovery_when_signals_are_low():
     result = app.deterministic_training_recommendation(
         [{"id": "today", "date": date.today().isoformat(), "title": "Long Run", "kind": "run", "minutes": 70, "status": "planned", "locked": False}],

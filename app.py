@@ -174,7 +174,7 @@ def build_draft(request: BlockDraftRequest) -> dict[str, Any]:
     week_template: list[tuple[int, str, str, int, str, list[str]]] = []
     lifting_days = [0, 1, 3, 4, 6][:len(lifting)]
     for day_offset, (title, workout) in zip(lifting_days, lifting):
-        week_template.append((day_offset, "strength", title, request.available_minutes, "Strength session", workout))
+        week_template.append((day_offset, "strength", title, request.available_minutes, "Strength session", [canonical_workout_line(line) for line in workout]))
     if request.run_days:
         run_offsets = [2, 5, 6][:request.run_days]
         run_names = ["Easy Run", "Easy Run", "Long Run"]
@@ -316,6 +316,7 @@ def initialize() -> None:
         existing = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         if existing == 0:
             import_legacy_sessions(db)
+        apply_exercise_aliases(db)
 
 
 def import_legacy_sessions(db: sqlite3.Connection) -> None:
@@ -350,8 +351,42 @@ def row_to_session(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+# Different names for the same exercise, mapped to the name used in the lifting log.
+# Progress, last-weight suggestions, and planned workouts all use the right-hand name.
+EXERCISE_ALIASES = {
+    "triceps pressdown": "Rope Pushdown",
+    "overhead cable extension": "Overhead Cable Tricep Extension",
+    "overhead press": "Barbell Overhead Press",
+    "pull-up or lat pulldown": "Lat Pulldown",
+    "cable chest fly": "Cable Fly",
+}
+
+
+def canonical_exercise(name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", name.strip())
+    return EXERCISE_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def canonical_workout_line(line: str) -> str:
+    name, separator, prescription = line.partition("—")
+    canonical = canonical_exercise(name)
+    return f"{canonical} —{prescription}" if separator else canonical
+
+
 def normalize_exercise(name: str) -> str:
-    return re.sub(r"\s+", " ", name.strip().lower())
+    return canonical_exercise(name).lower()
+
+
+def apply_exercise_aliases(db: sqlite3.Connection) -> int:
+    """Rename aliased exercises in planned sessions (idempotent). Logged history keeps its original text."""
+    changed = 0
+    for row in db.execute("SELECT id, workout_json FROM sessions WHERE status = 'planned'").fetchall():
+        lines = json.loads(row["workout_json"] or "[]")
+        renamed = [canonical_workout_line(line) for line in lines]
+        if renamed != lines:
+            db.execute("UPDATE sessions SET workout_json = ? WHERE id = ?", (json.dumps(renamed), row["id"]))
+            changed += 1
+    return changed
 
 
 def prescription_details(prescription: str) -> tuple[int, str, str]:
@@ -387,7 +422,8 @@ def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_row
         name, _, prescription = outline.partition("—")
         logged = sorted(by_exercise.get(index, []), key=lambda item: item["set_number"])
         same_exercise = [dict(row) for row in previous_rows if normalize_exercise(row["exercise_name"]) == normalize_exercise(name)]
-        previous = max(same_exercise, key=lambda item: item["completed_at"]) if same_exercise else None
+        # Top set (heaviest, then most reps) from the most recent day this exercise was done.
+        previous = max(same_exercise, key=lambda item: (item["completed_at"][:10], item["weight"], item["reps"])) if same_exercise else None
         target_sets, target_reps, starting_guide = prescription_details(prescription.strip() or "Working sets")
         exercises.append({
             "index": index, "name": name.strip(), "prescription": prescription.strip() or "Working sets",
@@ -1306,7 +1342,7 @@ def progress() -> dict[str, Any]:
         workout = json.loads(row["workout_json"])
         if row["exercise_index"] >= len(workout):
             continue
-        name = workout[row["exercise_index"]].partition("—")[0].strip()
+        name = canonical_exercise(workout[row["exercise_index"]].partition("—")[0])
         key = normalize_exercise(name)
         estimated_1rm = round(row["weight"] * (1 + row["reps"] / 30), 1) if row["reps"] else 0
         point = {"date": row["session_date"], "weight": row["weight"], "reps": row["reps"], "rpe": row["rpe"], "e1rm": estimated_1rm, "session": row["title"]}
