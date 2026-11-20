@@ -96,6 +96,30 @@ class SessionUpdate(BaseModel):
     status: str | None = None
 
 
+class SessionCreate(BaseModel):
+    session_date: str
+    kind: str = Field(default="strength", pattern="^(strength|run|mobility)$")
+    title: str = Field(min_length=2, max_length=120)
+    minutes: int = Field(default=45, ge=10, le=360)
+    description: str = Field(default="", max_length=500)
+    workout: list[str] = Field(default_factory=list)
+
+
+class ExerciseInput(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    sets: int = Field(default=3, ge=1, le=12)
+    reps: str = Field(default="8–12", max_length=12)
+    weight: float | None = Field(default=None, ge=0, le=2000)
+    replace_index: int | None = Field(default=None, ge=0)
+
+
+class ExerciseUpdate(BaseModel):
+    sets: int | None = Field(default=None, ge=1, le=12)
+    reps: str | None = Field(default=None, max_length=12)
+    weight: float | None = Field(default=None, ge=0, le=2000)
+    clear_weight: bool = False
+
+
 class BlockDraftRequest(BaseModel):
     name: str = Field(default="My next training block", min_length=2, max_length=80)
     weeks: int = Field(default=10, ge=4, le=24)
@@ -106,7 +130,7 @@ class BlockDraftRequest(BaseModel):
     available_minutes: int = Field(default=60, ge=20, le=180)
     equipment: str = "Full gym"
     avoid: str = "Bulgarian split squats"
-    split: str = "body-part-balanced"
+    split: str = "logged-routine"
     include_mobility: bool = False
 
 
@@ -135,6 +159,37 @@ def phase_for(week: int, weeks: int) -> tuple[str, str]:
     return "Build", "Progress working sets when form and effort support it."
 
 
+# Built from the lifting log (Jun–Nov 2026): chest/triceps/shoulders twice a week,
+# back/biceps once or twice, legs about once, using the exercises actually logged.
+ROUTINE_DAYS: dict[str, list[str]] = {
+    "Chest, Triceps & Shoulders": ["Barbell Bench Press — 3 × 4–6", "Incline Dumbbell Press — 3 × 6–8", "Seated Dumbbell Shoulder Press — 2 × 8–10", "Pec Dec Fly — 3 × 8–10", "Rope Pushdown — 3 × 8–12"],
+    "Back & Biceps": ["Lat Pulldown — 3 × 6–10", "Seated Row — 3 × 8–10", "Face Pull — 2 × 10–12", "Hammer Curl — 2 × 6–10", "Reverse Dumbbell Curl — 2 × 8–12"],
+    "Chest, Triceps & Shoulders · Volume": ["Barbell Bench Press — 3 × 6–8", "Incline Dumbbell Press — 3 × 6–8", "Cable Fly — 2 × 10–12", "Low To High Cable Fly — 2 × 10–12", "Rope Pushdown — 2 × 8–10", "Tricep Extension — 2 × 8–12", "Cable Lateral Raise — 2 × 10–12"],
+    "Back & Biceps · Volume": ["Lat Pulldown — 3 × 8–10", "Seated Row — 3 × 8–10", "Face Pull — 2 × 10–12", "Dumbbell Curl — 2 × 8–10", "Reverse Dumbbell Curl — 2 × 10–12"],
+    "Legs": ["Pendulum Squat — 3 × 6–8", "Leg Extension — 3 × 8–10", "Lying Hamstring Curl — 3 × 8–10", "Hip Thrust — 3 × 8–12", "Cable Crunch — 2 × 12–15", "Russian Twist — 2 × 15"],
+    "Legs · Mobility": ["Goblet Squat — 2 × 10", "Side Squat — 2 × 10", "Dumbbell Romanian Deadlift — 2 × 10"],
+}
+# Which days to use for each lifting frequency, in weekly order (Mon, Tue, Thu, Fri, Sun, Sat).
+ROUTINE_BY_DAYS = {
+    2: ["Chest, Triceps & Shoulders", "Back & Biceps"],
+    3: ["Chest, Triceps & Shoulders", "Back & Biceps", "Legs"],
+    4: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Legs"],
+    5: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Back & Biceps · Volume", "Legs"],
+    6: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Back & Biceps · Volume", "Legs", "Legs · Mobility"],
+}
+
+
+LIFT_DAY_OFFSETS = [0, 1, 3, 4, 6, 5]  # Mon, Tue, Thu, Fri, Sun, Sat
+
+
+def logged_routine_workouts(days: int = 6) -> list[tuple[str, list[str]]]:
+    return [(title, ROUTINE_DAYS[title]) for title in ROUTINE_BY_DAYS[max(2, min(6, days))]]
+
+
+def cap_sets(line: str, cap: int) -> str:
+    return re.sub(r"(\d+)(\s*[×x]\s*)", lambda m: f"{min(int(m.group(1)), cap)}{m.group(2)}", line, count=1)
+
+
 def strength_workouts(split: str, avoid: str) -> list[tuple[str, list[str]]]:
     lower_single_leg = "Leg Press — 3 × 10–12" if "bulgarian" in avoid.lower() else "Bulgarian Split Squat — 3 × 8–10"
     body_part = [
@@ -145,6 +200,8 @@ def strength_workouts(split: str, avoid: str) -> list[tuple[str, list[str]]]:
         ("Lower · Hinge Focus", ["Deadlift or Trap-Bar Deadlift — 3 × 3–6", "Front Squat or Leg Press — 3 × 8–12", "Hip Thrust — 3 × 8–12", "Leg Extension — 2 × 12–15", "Seated Calf Raise — 3 × 10–15"]),
         ("Back & Biceps · Volume", ["Lat Pulldown — 3 × 8–12", "Single-Arm Cable Row — 3 × 10–12", "Face Pull — 3 × 12–15", "Incline Dumbbell Curl — 3 × 10–12", "Hammer Curl — 3 × 10–15"]),
     ]
+    if split == "logged-routine":
+        return logged_routine_workouts()
     if split == "body-part-balanced":
         return body_part
     if split == "push-pull-legs":
@@ -170,9 +227,12 @@ def strength_workouts(split: str, avoid: str) -> list[tuple[str, list[str]]]:
 
 def build_draft(request: BlockDraftRequest) -> dict[str, Any]:
     start = monday_on_or_after(date.today())
-    lifting = strength_workouts(request.split, request.avoid)[:request.lifting_days]
+    if request.split == "logged-routine":
+        lifting = logged_routine_workouts(request.lifting_days)
+    else:
+        lifting = strength_workouts(request.split, request.avoid)[:request.lifting_days]
     week_template: list[tuple[int, str, str, int, str, list[str]]] = []
-    lifting_days = [0, 1, 3, 4, 6][:len(lifting)]
+    lifting_days = LIFT_DAY_OFFSETS[:len(lifting)]
     for day_offset, (title, workout) in zip(lifting_days, lifting):
         week_template.append((day_offset, "strength", title, request.available_minutes, "Strength session", [canonical_workout_line(line) for line in workout]))
     if request.run_days:
@@ -199,7 +259,8 @@ def build_draft(request: BlockDraftRequest) -> dict[str, Any]:
                 target_miles = max(1.5, initial * run_multiplier)
                 session_description = f"{phase}: easy effort · target {target_miles:.1f} mi"
                 minutes = max(25, int(target_miles * 11))
-            sessions.append({"id": f"block-{uuid4().hex[:12]}", "date": scheduled.isoformat(), "kind": kind, "title": session_title, "minutes": minutes, "description": session_description, "workout": workout, "status": "planned", "locked": False})
+            lines = [cap_sets(line, 2) for line in workout] if kind == "strength" and phase == "Deload" else list(workout)
+            sessions.append({"id": f"block-{uuid4().hex[:12]}", "date": scheduled.isoformat(), "kind": kind, "title": session_title, "minutes": minutes, "description": session_description, "workout": lines, "status": "planned", "locked": False})
     return {"id": f"plan-{uuid4().hex[:12]}", "name": request.name, "start_date": start.isoformat(), "goals": request.goals, "config": request.model_dump(), "phases": phases, "sessions": sessions}
 
 
@@ -302,6 +363,17 @@ def initialize() -> None:
                 source_json TEXT NOT NULL DEFAULT '{}',
                 synced_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS races (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                race_date TEXT NOT NULL,
+                distance TEXT NOT NULL,
+                goal_seconds INTEGER,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                plan_json TEXT NOT NULL DEFAULT '{}',
+                applied_at TEXT,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS garmin_sync_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at TEXT NOT NULL,
@@ -377,6 +449,39 @@ def normalize_exercise(name: str) -> str:
     return canonical_exercise(name).lower()
 
 
+def retemplate_future_strength(db: sqlite3.Connection, plan_id: str) -> int:
+    """Switch an active block's future lift days to the logged routine, keeping its dates and phases.
+
+    Only planned, unlocked sessions with no logged sets change; the weekday decides the workout.
+    """
+    row = db.execute("SELECT plan_json FROM plans WHERE id = ?", (plan_id,)).fetchone()
+    if not row:
+        return 0
+    plan = json.loads(row["plan_json"])
+    days = int(plan.get("config", {}).get("lifting_days") or 5)
+    titles = ROUTINE_BY_DAYS[max(2, min(6, days))]
+    by_weekday = {offset: titles[index] for index, offset in enumerate(LIFT_DAY_OFFSETS[:len(titles)])}
+    changed = 0
+    for session in db.execute(
+        """SELECT * FROM sessions s WHERE source = ? AND kind = 'strength' AND status = 'planned' AND locked = 0 AND session_date >= ?
+           AND NOT EXISTS (SELECT 1 FROM set_logs sl WHERE sl.session_id = s.id)""",
+        (f"plan:{plan_id}", date.today().isoformat()),
+    ).fetchall():
+        title = by_weekday.get(date.fromisoformat(session["session_date"]).weekday())
+        if not title:
+            continue
+        week = re.match(r"^(W\d+)\s*·", session["title"] or "")
+        lines = ROUTINE_DAYS[title]
+        if (session["description"] or "").startswith("Deload"):
+            lines = [cap_sets(line, 2) for line in lines]
+        db.execute("UPDATE sessions SET title = ?, workout_json = ? WHERE id = ?",
+                   (f"{week.group(1)} · {title}" if week else title, json.dumps(lines), session["id"]))
+        changed += 1
+    plan.setdefault("config", {})["split"] = "logged-routine"
+    db.execute("UPDATE plans SET plan_json = ? WHERE id = ?", (json.dumps(plan), plan_id))
+    return changed
+
+
 def apply_exercise_aliases(db: sqlite3.Connection) -> int:
     """Rename aliased exercises in planned sessions (idempotent). Logged history keeps its original text."""
     changed = 0
@@ -405,6 +510,17 @@ def prescription_details(prescription: str) -> tuple[int, str, str]:
     return sets, reps, f"No baseline yet: use {guide}; stop with 2–3 reps in reserve."
 
 
+def line_target_weight(prescription: str) -> float | None:
+    match = re.search(r"@\s*(\d+(?:\.\d+)?)\s*lb", prescription or "")
+    return float(match.group(1)) if match else None
+
+
+def format_workout_line(name: str, sets: int, reps: str, weight: float | None = None) -> str:
+    reps = re.sub(r"\s+", "", str(reps or "8–12")).replace("-", "–")
+    line = f"{canonical_exercise(name)} — {int(sets)} × {reps}"
+    return f"{line} @ {weight:g} lb" if weight else line
+
+
 def exercise_name_from_session(session: dict[str, Any], exercise_index: int) -> str | None:
     workout = session.get("workout", [])
     if exercise_index >= len(workout):
@@ -425,10 +541,11 @@ def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_row
         # Top set (heaviest, then most reps) from the most recent day this exercise was done.
         previous = max(same_exercise, key=lambda item: (item["completed_at"][:10], item["weight"], item["reps"])) if same_exercise else None
         target_sets, target_reps, starting_guide = prescription_details(prescription.strip() or "Working sets")
+        target_weight = line_target_weight(prescription)
         exercises.append({
             "index": index, "name": name.strip(), "prescription": prescription.strip() or "Working sets",
-            "sets": logged, "target_sets": target_sets, "target_reps": target_reps,
-            "suggested_weight": previous["weight"] if previous else None,
+            "sets": logged, "target_sets": target_sets, "target_reps": target_reps, "target_weight": target_weight,
+            "suggested_weight": target_weight if target_weight is not None else (previous["weight"] if previous else None),
             "suggested_reps": previous["reps"] if previous else None,
             "starting_guide": starting_guide if not previous else f"Previous logged set: {previous['weight']:g} lb × {previous['reps']}. Start there, then adjust for RPE 7–8.",
         })
@@ -1151,7 +1268,10 @@ def activate_plan(plan_id: str) -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=404, detail="Plan not found.")
         plan = json.loads(row["plan_json"])
+        cutoff = race_run_cutoff(db)
         for session in plan.get("sessions", []):
+            if cutoff and session["kind"] == "run" and session["date"] <= cutoff:
+                continue  # an applied race plan owns these run days
             db.execute(
                 """INSERT OR IGNORE INTO sessions
                    (id, session_date, kind, title, minutes, description, workout_json, status, locked, source)
@@ -1181,8 +1301,9 @@ def revise_plan(plan_id: str, request: BlockDraftRequest) -> dict[str, Any]:
                AND NOT EXISTS (SELECT 1 FROM set_logs sl WHERE sl.session_id = sessions.id)""",
             (f"plan:{plan_id}", today),
         )
+        cutoff = race_run_cutoff(db)
         for session in replacement["sessions"]:
-            if session["date"] < today:
+            if session["date"] < today or (cutoff and session["kind"] == "run" and session["date"] <= cutoff):
                 continue
             db.execute(
                 """INSERT OR IGNORE INTO sessions
@@ -1394,6 +1515,288 @@ def toggle_lock(session_id: str) -> dict[str, bool]:
         locked = not bool(row["locked"])
         db.execute("UPDATE sessions SET locked = ? WHERE id = ?", (int(locked), session_id))
     return {"locked": locked}
+
+
+# ---------------------------------------------------------------- exercise catalog + workout editing
+
+
+def exercise_history_stats() -> dict[str, dict[str, Any]]:
+    """Per logged exercise: how many workouts, and the top set of the most recent one."""
+    with connection() as db:
+        rows = db.execute(
+            """SELECT sl.session_id, sl.exercise_index, sl.weight, sl.reps, s.session_date, s.workout_json
+               FROM set_logs sl JOIN sessions s ON s.id = sl.session_id"""
+        ).fetchall()
+    stats: dict[str, dict[str, Any]] = {}
+    workouts: dict[str, list[str]] = {}
+    for row in rows:
+        lines = workouts.setdefault(row["session_id"], json.loads(row["workout_json"] or "[]"))
+        if row["exercise_index"] >= len(lines):
+            continue
+        name = canonical_exercise(lines[row["exercise_index"]].partition("—")[0])
+        item = stats.setdefault(name.lower(), {"name": name, "sessions": set(), "last_date": "", "last_weight": None, "last_reps": None})
+        item["sessions"].add(row["session_id"])
+        if (row["session_date"], row["weight"], row["reps"]) > (item["last_date"], item["last_weight"] or -1, item["last_reps"] or -1):
+            item.update(last_date=row["session_date"], last_weight=row["weight"], last_reps=row["reps"])
+    for item in stats.values():
+        item["times"] = len(item.pop("sessions"))
+    return stats
+
+
+@app.get("/api/exercises/catalog")
+def exercise_catalog(q: str = "", group: str = "", limit: int = 40) -> dict[str, Any]:
+    from catalog import build_catalog, search_catalog
+    items = build_catalog(exercise_history_stats())
+    groups = sorted({item["group"] for item in items}, key=lambda g: (g == "Other", g))
+    return {"groups": groups, "results": search_catalog(items, q, group, max(1, min(limit, 120)))}
+
+
+@app.post("/api/sessions")
+def create_session(payload: SessionCreate) -> dict[str, Any]:
+    try:
+        date.fromisoformat(payload.session_date)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Use a valid date.") from error
+    session_id = f"custom-{uuid4().hex[:12]}"
+    workout = [canonical_workout_line(line) for line in payload.workout if line.strip()]
+    with connection() as db:
+        db.execute(
+            """INSERT INTO sessions (id, session_date, kind, title, minutes, description, workout_json, status, locked, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'planned', 0, 'custom')""",
+            (session_id, payload.session_date, payload.kind, payload.title.strip(), payload.minutes, payload.description, json.dumps(workout)),
+        )
+    return session_detail(session_id)
+
+
+def _session_workout(db: sqlite3.Connection, session_id: str) -> list[str]:
+    row = db.execute("SELECT workout_json FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Training session not found.")
+    return json.loads(row["workout_json"] or "[]")
+
+
+@app.post("/api/sessions/{session_id}/exercises")
+def add_or_swap_exercise(session_id: str, payload: ExerciseInput) -> dict[str, Any]:
+    with connection() as db:
+        workout = _session_workout(db, session_id)
+        line = format_workout_line(payload.name, payload.sets, payload.reps, payload.weight)
+        if payload.replace_index is None:
+            workout.append(line)
+        else:
+            if payload.replace_index >= len(workout):
+                raise HTTPException(status_code=404, detail="That exercise is no longer in this workout.")
+            if db.execute("SELECT 1 FROM set_logs WHERE session_id = ? AND exercise_index = ?", (session_id, payload.replace_index)).fetchone():
+                raise HTTPException(status_code=409, detail="Sets are already logged for this exercise. Add the new one instead of swapping.")
+            workout[payload.replace_index] = line
+        db.execute("UPDATE sessions SET workout_json = ? WHERE id = ?", (json.dumps(workout), session_id))
+    return session_detail(session_id)
+
+
+@app.patch("/api/sessions/{session_id}/exercises/{index}")
+def update_exercise(session_id: str, index: int, payload: ExerciseUpdate) -> dict[str, Any]:
+    with connection() as db:
+        workout = _session_workout(db, session_id)
+        if index < 0 or index >= len(workout):
+            raise HTTPException(status_code=404, detail="That exercise is no longer in this workout.")
+        name, _, prescription = workout[index].partition("—")
+        sets, reps, _ = prescription_details(prescription)
+        weight = None if payload.clear_weight else (payload.weight if payload.weight is not None else line_target_weight(prescription))
+        workout[index] = format_workout_line(name, payload.sets or sets, payload.reps or reps, weight)
+        db.execute("UPDATE sessions SET workout_json = ? WHERE id = ?", (json.dumps(workout), session_id))
+    return session_detail(session_id)
+
+
+@app.delete("/api/sessions/{session_id}/exercises/{index}")
+def remove_exercise(session_id: str, index: int) -> dict[str, Any]:
+    """Remove one exercise and its logged sets; later exercises' sets shift down one index."""
+    with connection() as db:
+        workout = _session_workout(db, session_id)
+        if index < 0 or index >= len(workout):
+            raise HTTPException(status_code=404, detail="That exercise is no longer in this workout.")
+        if len(workout) == 1:
+            raise HTTPException(status_code=400, detail="Keep at least one exercise in the workout.")
+        del workout[index]
+        db.execute("DELETE FROM set_logs WHERE session_id = ? AND exercise_index = ?", (session_id, index))
+        for later in range(index + 1, len(workout) + 1):
+            db.execute("UPDATE set_logs SET exercise_index = ? WHERE session_id = ? AND exercise_index = ?", (later - 1, session_id, later))
+        db.execute("UPDATE sessions SET workout_json = ? WHERE id = ?", (json.dumps(workout), session_id))
+    return session_detail(session_id)
+
+
+# ---------------------------------------------------------------- running + races
+
+
+def recent_easy_pace() -> float | None:
+    """Median pace (s/mi) of the last 28 days of Garmin runs, a stand-in for easy pace."""
+    since = (date.today() - timedelta(days=28)).isoformat()
+    with connection() as db:
+        rows = db.execute(
+            "SELECT distance_miles, duration_minutes FROM imported_activities WHERE activity_date >= ? AND lower(activity_type) LIKE '%run%' AND distance_miles > 1",
+            (since,),
+        ).fetchall()
+    paces = sorted(row["duration_minutes"] * 60 / row["distance_miles"] for row in rows if row["duration_minutes"])
+    return paces[len(paces) // 2] if paces else None
+
+
+def recent_weekly_miles() -> float:
+    since = (date.today() - timedelta(days=27)).isoformat()
+    with connection() as db:
+        total = db.execute(
+            "SELECT COALESCE(SUM(distance_miles), 0) FROM imported_activities WHERE activity_date >= ? AND lower(activity_type) LIKE '%run%'", (since,)
+        ).fetchone()[0]
+    return round(total / 4, 1)
+
+
+@app.get("/api/run-types")
+def run_types() -> dict[str, Any]:
+    from catalog import PACE_FACTORS, RUN_TYPES
+    from race_plan import format_pace
+    easy = recent_easy_pace()
+    marathon = easy / PACE_FACTORS["easy"] if easy else None
+    return {
+        "types": [{"key": key, **value, "pace_text": format_pace(marathon * PACE_FACTORS[value["pace"]]) if marathon else None} for key, value in RUN_TYPES.items()],
+        "easy_pace": format_pace(easy) if easy else None,
+        "weekly_miles": recent_weekly_miles(),
+    }
+
+
+class RaceRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    race_date: str
+    distance: str = Field(pattern="^(5k|10k|half|marathon)$")
+    goal_time: str | None = Field(default=None, max_length=10)
+    run_days: list[int] = Field(default_factory=lambda: [1, 2, 5, 6])
+    long_run_day: int = Field(default=6, ge=0, le=6)
+    current_weekly_miles: float | None = Field(default=None, ge=0, le=150)
+    peak_miles: float | None = Field(default=None, ge=10, le=120)
+
+
+def _build_race(payload: RaceRequest) -> tuple[dict[str, Any], int | None]:
+    from race_plan import generate_plan, parse_goal
+    try:
+        race_date = date.fromisoformat(payload.race_date)
+        goal = parse_goal(payload.goal_time, payload.distance)
+        plan = generate_plan(
+            race_date, payload.distance, payload.current_weekly_miles if payload.current_weekly_miles is not None else recent_weekly_miles(),
+            payload.run_days, payload.long_run_day, goal_seconds=goal, peak_miles=payload.peak_miles, easy_pace=recent_easy_pace(), race_name=payload.name,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return plan, goal
+
+
+def race_payload(row: sqlite3.Row) -> dict[str, Any]:
+    plan = json.loads(row["plan_json"] or "{}")
+    today = date.today()
+    current = next((week for week in plan.get("weeks", []) if date.fromisoformat(week["start"]) <= today < date.fromisoformat(week["start"]) + timedelta(days=7)), None)
+    return {
+        "id": row["id"], "name": row["name"], "race_date": row["race_date"], "distance": row["distance"],
+        "settings": json.loads(row["settings_json"] or "{}"), "applied_at": row["applied_at"],
+        "days_to_go": (date.fromisoformat(row["race_date"]) - today).days, "current_week": current, "plan": plan,
+    }
+
+
+@app.get("/api/races")
+def list_races() -> dict[str, Any]:
+    with connection() as db:
+        rows = db.execute("SELECT * FROM races ORDER BY race_date").fetchall()
+    return {"races": [race_payload(row) for row in rows], "weekly_miles": recent_weekly_miles(), "easy_pace": recent_easy_pace()}
+
+
+@app.post("/api/races/preview")
+def preview_race(payload: RaceRequest) -> dict[str, Any]:
+    plan, _ = _build_race(payload)
+    return {"plan": plan}
+
+
+@app.post("/api/races")
+def create_race(payload: RaceRequest) -> dict[str, Any]:
+    plan, goal = _build_race(payload)
+    race_id = f"race-{uuid4().hex[:10]}"
+    with connection() as db:
+        db.execute(
+            "INSERT INTO races (id, name, race_date, distance, goal_seconds, settings_json, plan_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (race_id, payload.name, payload.race_date, payload.distance, goal, json.dumps(payload.model_dump()), json.dumps(plan), datetime.now().astimezone().isoformat(timespec="seconds")),
+        )
+        row = db.execute("SELECT * FROM races WHERE id = ?", (race_id,)).fetchone()
+    return race_payload(row)
+
+
+@app.put("/api/races/{race_id}")
+def update_race(race_id: str, payload: RaceRequest) -> dict[str, Any]:
+    plan, goal = _build_race(payload)
+    with connection() as db:
+        if not db.execute("SELECT 1 FROM races WHERE id = ?", (race_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Race not found.")
+        db.execute(
+            "UPDATE races SET name = ?, race_date = ?, distance = ?, goal_seconds = ?, settings_json = ?, plan_json = ? WHERE id = ?",
+            (payload.name, payload.race_date, payload.distance, goal, json.dumps(payload.model_dump()), json.dumps(plan), race_id),
+        )
+        row = db.execute("SELECT * FROM races WHERE id = ?", (race_id,)).fetchone()
+        applied = bool(row["applied_at"])
+    if applied:  # keep the calendar in sync with the edited plan
+        apply_race(race_id)
+        with connection() as db:
+            row = db.execute("SELECT * FROM races WHERE id = ?", (race_id,)).fetchone()
+    return race_payload(row)
+
+
+def _clear_race_sessions(db: sqlite3.Connection, race_id: str) -> None:
+    db.execute(
+        """DELETE FROM sessions WHERE source = ? AND status = 'planned' AND locked = 0
+           AND NOT EXISTS (SELECT 1 FROM set_logs sl WHERE sl.session_id = sessions.id)""",
+        (f"race:{race_id}",),
+    )
+
+
+@app.post("/api/races/{race_id}/apply")
+def apply_race(race_id: str) -> dict[str, Any]:
+    """Put the race plan's runs on the calendar from today to race day.
+
+    Planned, unlocked run sessions in that window (e.g. the lifting block's easy runs)
+    are replaced; completed, locked, and logged sessions are never touched.
+    """
+    today = date.today().isoformat()
+    with connection() as db:
+        row = db.execute("SELECT * FROM races WHERE id = ?", (race_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Race not found.")
+        plan = json.loads(row["plan_json"])
+        _clear_race_sessions(db, race_id)
+        replaced = db.execute(
+            """DELETE FROM sessions WHERE kind = 'run' AND status = 'planned' AND locked = 0 AND session_date BETWEEN ? AND ?
+               AND source NOT LIKE 'race:%' AND NOT EXISTS (SELECT 1 FROM logs l WHERE l.session_id = sessions.id)""",
+            (today, row["race_date"]),
+        ).rowcount
+        created = 0
+        for week in plan.get("weeks", []):
+            for index, run in enumerate(week.get("runs", [])):
+                if run["date"] < today:
+                    continue
+                db.execute(
+                    """INSERT OR IGNORE INTO sessions (id, session_date, kind, title, minutes, description, workout_json, status, locked, source)
+                       VALUES (?, ?, 'run', ?, ?, ?, ?, 'planned', 0, ?)""",
+                    (f"{race_id}-{run['date']}-{index}", run["date"], run["title"], run["minutes"], run["description"], json.dumps(run["workout"]), f"race:{race_id}"),
+                )
+                created += 1
+        db.execute("UPDATE races SET applied_at = ? WHERE id = ?", (datetime.now().astimezone().isoformat(timespec="seconds"), race_id))
+    return {"status": "applied", "runs_created": created, "runs_replaced": replaced}
+
+
+@app.delete("/api/races/{race_id}")
+def delete_race(race_id: str) -> dict[str, Any]:
+    with connection() as db:
+        if not db.execute("SELECT 1 FROM races WHERE id = ?", (race_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Race not found.")
+        _clear_race_sessions(db, race_id)
+        db.execute("DELETE FROM races WHERE id = ?", (race_id,))
+    return {"status": "deleted"}
+
+
+def race_run_cutoff(db: sqlite3.Connection) -> str | None:
+    """Latest race date with an applied plan; block runs up to it are owned by the race plan."""
+    row = db.execute("SELECT MAX(race_date) FROM races WHERE applied_at IS NOT NULL AND race_date >= ?", (date.today().isoformat(),)).fetchone()
+    return row[0] if row and row[0] else None
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
