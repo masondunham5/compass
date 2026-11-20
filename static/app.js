@@ -170,11 +170,11 @@ function renderGarmin(data) {
   $("#garmin-connection-copy").textContent = status.configured
     ? (status.warning || "This server can pull your private Garmin activities and daily recovery metrics.")
     : "Add a Personal API key in Settings when you are ready. Health Hub will keep it only on this computer.";
-  $("#garmin-last-sync").textContent = sync?.status === "success" ? displaySyncTime(sync.finished_at) : "Not synced";
+  $("#garmin-last-sync").textContent = ["success", "partial"].includes(sync?.status) ? displaySyncTime(sync.finished_at) : "Not synced";
   $("#garmin-sleep").textContent = data.average_sleep_hours ? `${data.average_sleep_hours} h` : "—";
   $("#garmin-hrv").textContent = data.average_hrv ? `${data.average_hrv} ms` : "—";
   $("#garmin-steps").textContent = data.average_steps ? Number(data.average_steps).toLocaleString() : "—";
-  $("#garmin-sync-message").textContent = sync?.status === "error" ? sync.message : status.warning || "";
+  $("#garmin-sync-message").textContent = ["error", "partial"].includes(sync?.status) ? sync.message : status.warning || "";
   $("#garmin-sync-now").disabled = !status.configured;
   $("#garmin-backfill").disabled = !status.configured;
   $("#garmin-sync-now").title = status.configured ? "Pull the latest Garmin data" : "Add a local Garmin key in Settings first";
@@ -433,14 +433,14 @@ bindClick("#open-health-button", () => selectView("health"));
 bindClick("#garmin-sync-now", async () => {
   const button = $("#garmin-sync-now"); const message = $("#garmin-sync-message");
   button.disabled = true; button.textContent = "Syncing…"; message.textContent = "Pulling your latest private Garmin data…";
-  try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = `${result.initial_backfill ? "Initial history" : "Sync"} complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across ${result.days_synced} days.`; await load(); }
+  try { const result = await api("/api/garmin/sync", { method: "POST" }); message.textContent = result.status === "partial" ? result.message : `${result.initial_backfill ? "Initial history" : "Sync"} complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across ${result.days_synced} days.`; await load(); }
   catch (error) { message.textContent = error.message; }
   finally { button.textContent = "Sync now"; button.disabled = false; }
 });
 bindClick("#garmin-backfill", async () => {
   const button = $("#garmin-backfill"); const message = $("#garmin-sync-message");
   button.disabled = true; $("#garmin-sync-now").disabled = true; button.textContent = "Backfilling…"; message.textContent = "Fetching up to 30 days of Garmin history. This can take a minute.";
-  try { const result = await api("/api/garmin/backfill", { method: "POST" }); message.textContent = `History complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across 30 days.`; await load(); }
+  try { const result = await api("/api/garmin/backfill", { method: "POST" }); message.textContent = result.status === "partial" ? result.message : `History complete: ${result.activities_imported} activities and ${result.metrics_updated} daily records across 30 days.`; await load(); }
   catch (error) { message.textContent = error.message; }
   finally { button.textContent = "Backfill 30 days"; button.disabled = false; $("#garmin-sync-now").disabled = false; }
 });

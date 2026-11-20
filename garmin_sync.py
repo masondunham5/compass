@@ -6,18 +6,29 @@ Run manually first:
 The only credential is GARMIN_PERSONAL_API_KEY in the local .env file. This
 module deliberately uses the official personal API—not a Garmin password or an
 unofficial web-scraping library.
+
+Requests are paced (GARMIN_REQUEST_INTERVAL seconds apart, default 1.5) and
+429/5xx responses are retried with exponential backoff, honoring Retry-After.
+Each day is committed as soon as it is fetched, so a sync that stops early
+keeps everything it already pulled. Every endpoint's full response is kept in
+garmin_raw_responses; the useful fields are also copied into columns on
+garmin_daily_metrics.
 """
 
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import os
+import random
+import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Callable
 
 from app import activity_id, connection, initialize, normalize_activity
 
@@ -25,24 +36,114 @@ from app import activity_id, connection, initialize, normalize_activity
 BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_URL = f"{BASE_URL}/personalapitoken-service/personal-api/personal-api-key/token"
 
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+MAX_BACKOFF_SECONDS = 120.0
+
 
 class GarminSyncError(RuntimeError):
     """A safe, user-facing error; never include the secret key in its text."""
 
 
-def _request(url: str, *, headers: dict[str, str], method: str = "GET") -> Any:
-    request = urllib.request.Request(url, headers=headers, method=method)
+class GarminFatalError(GarminSyncError):
+    """Stops the sync: auth failure, persistent rate limiting, or no network."""
+
+
+class GarminEndpointError(GarminSyncError):
+    """One endpoint failed for one day; the rest of the sync can continue."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+# --------------------------------------------------------------------------- #
+# HTTP: pacing + retry
+# --------------------------------------------------------------------------- #
+
+def _env_float(name: str, default: float) -> float:
     try:
-        with urllib.request.urlopen(request, timeout=25) as response:
-            body = response.read().decode("utf-8", errors="replace").strip()
-    except urllib.error.HTTPError as error:
-        if error.code in {401, 403}:
-            raise GarminSyncError("Garmin rejected the key. It may be expired, revoked, or copied incorrectly.") from error
-        if error.code == 429:
-            raise GarminSyncError("Garmin is temporarily rate-limiting requests. Try again later.") from error
-        raise GarminSyncError(f"Garmin request failed ({error.code}). Try again later.") from error
-    except urllib.error.URLError as error:
-        raise GarminSyncError("Health Hub could not reach Garmin. Check this computer’s internet connection.") from error
+        return max(0.0, float(os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+class _Pacer:
+    """Keeps a minimum gap between requests; widens it after a 429."""
+
+    def __init__(self) -> None:
+        self.interval = _env_float("GARMIN_REQUEST_INTERVAL", 1.5)
+        self._last = 0.0
+
+    def wait(self) -> None:
+        delay = self._last + self.interval - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self._last = time.monotonic()
+
+    def slow_down(self) -> None:
+        self.interval = min(10.0, max(self.interval * 2, 2.0))
+
+
+_pacer = _Pacer()
+
+
+def _retry_after_seconds(error: urllib.error.HTTPError) -> float | None:
+    header = error.headers.get("Retry-After") if error.headers else None
+    if not header:
+        return None
+    header = header.strip()
+    if header.isdigit():
+        return float(header)
+    try:
+        when = email.utils.parsedate_to_datetime(header)
+        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _backoff(attempt: int) -> float:
+    return min(MAX_BACKOFF_SECONDS, 5.0 * (2 ** attempt)) + random.uniform(0, 1)
+
+
+def _request(url: str, *, headers: dict[str, str], method: str = "GET") -> Any:
+    max_retries = _env_int("GARMIN_MAX_RETRIES", 5)
+    attempt = 0
+    while True:
+        _pacer.wait()
+        request = urllib.request.Request(url, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                body = response.read().decode("utf-8", errors="replace").strip()
+            break
+        except urllib.error.HTTPError as error:
+            if error.code in {401, 403}:
+                raise GarminFatalError("Garmin rejected the key. It may be expired, revoked, or copied incorrectly.") from error
+            if error.code in RETRYABLE_STATUS and attempt < max_retries:
+                if error.code == 429:
+                    _pacer.slow_down()
+                wait = _retry_after_seconds(error)
+                wait = min(MAX_BACKOFF_SECONDS, wait) if wait is not None else _backoff(attempt)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            if error.code == 429:
+                raise GarminFatalError("Garmin kept rate-limiting requests after several retries. Try again later.") from error
+            if error.code in {204, 404}:
+                return None  # No data for that day/endpoint.
+            raise GarminEndpointError(f"Garmin request failed ({error.code}).", error.code) from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            if attempt < max_retries:
+                time.sleep(_backoff(attempt))
+                attempt += 1
+                continue
+            raise GarminFatalError("Health Hub could not reach Garmin. Check this computer’s internet connection.") from error
     if not body:
         return None
     try:
@@ -54,14 +155,17 @@ def _request(url: str, *, headers: dict[str, str], method: str = "GET") -> Any:
 def access_token() -> str:
     key = os.getenv("GARMIN_PERSONAL_API_KEY", "").strip()
     if not key:
-        raise GarminSyncError("Garmin is not connected. Add GARMIN_PERSONAL_API_KEY to the local .env file first.")
-    payload = _request(TOKEN_URL, method="POST", headers={"Authorization": f"ApiKey {key}", "Accept": "*/*"})
+        raise GarminFatalError("Garmin is not connected. Add GARMIN_PERSONAL_API_KEY to the local .env file first.")
+    try:
+        payload = _request(TOKEN_URL, method="POST", headers={"Authorization": f"ApiKey {key}", "Accept": "*/*"})
+    except GarminEndpointError as error:
+        raise GarminFatalError(f"Garmin sign-in failed ({error.status}). Try again later.") from error
     if isinstance(payload, dict):
         token = payload.get("access_token") or payload.get("token")
     else:
         token = payload
     if not isinstance(token, str) or len(token.strip()) < 20:
-        raise GarminSyncError("Garmin returned an unexpected sign-in response. Check that the key is still active.")
+        raise GarminFatalError("Garmin returned an unexpected sign-in response. Check that the key is still active.")
     return token.strip()
 
 
@@ -70,6 +174,10 @@ def garmin_get(path: str, token: str, **params: Any) -> Any:
     suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
     return _request(f"{BASE_URL}{path}{suffix}", headers={"Authorization": f"Bearer {token}", "Accept": "*/*"})
 
+
+# --------------------------------------------------------------------------- #
+# Field extraction
+# --------------------------------------------------------------------------- #
 
 def _walk(value: Any, *keys: str) -> Any:
     """Find a known Garmin field across minor response-shape variations."""
@@ -89,11 +197,46 @@ def _walk(value: Any, *keys: str) -> Any:
     return None
 
 
+def _path(value: Any, dotted: str) -> Any:
+    for part in dotted.split("."):
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _find(value: Any, *keys: str) -> Any:
+    """Dotted keys are exact paths; plain keys are searched recursively."""
+    for key in keys:
+        found = _path(value, key) if "." in key else _walk(value, key)
+        if found is not None:
+            return found
+    return None
+
+
 def _number(value: Any) -> float | int | None:
+    if isinstance(value, bool):
+        return None
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _text(value: Any) -> str | None:
+    if value is None or isinstance(value, (dict, list)):
+        return None
+    return str(value)
+
+
+def _local_timestamp(value: Any) -> str | None:
+    """Garmin '...TimestampLocal' values are epoch ms of local wall-clock time."""
+    number = _number(value)
+    if number is None:
+        return _text(value)
+    return datetime.fromtimestamp(number / 1000, tz=timezone.utc).replace(tzinfo=None).isoformat(timespec="minutes")
 
 
 def _first_record(value: Any) -> dict[str, Any]:
@@ -103,6 +246,139 @@ def _first_record(value: Any) -> dict[str, Any]:
         return value[0]
     return {}
 
+
+# (column, SQL type, endpoint, candidate keys, converter)
+Field = tuple[str, str, str, tuple[str, ...], Callable[[Any], Any]]
+
+METRIC_FIELDS: list[Field] = [
+    # Original columns (read by the dashboard and the recommendation engine).
+    ("steps", "INTEGER", "summary", ("totalSteps", "steps"), _number),
+    ("active_calories", "REAL", "summary", ("activeKilocalories", "activeCalories"), _number),
+    ("total_calories", "REAL", "summary", ("totalKilocalories", "totalCalories"), _number),
+    ("resting_hr", "INTEGER", "heart_rate", ("restingHeartRate", "restingHR"), _number),
+    ("hrv_ms", "REAL", "hrv", ("lastNightAvg", "weeklyAvg", "hrvValue", "avgHrv"), _number),
+    ("sleep_seconds", "INTEGER", "sleep", ("sleepTimeSeconds", "sleepSeconds", "durationInSeconds"), _number),
+    ("stress_avg", "REAL", "summary", ("averageStressLevel", "avgStressLevel"), _number),
+    ("body_battery", "INTEGER", "summary", ("bodyBatteryMostRecentValue", "bodyBattery"), _number),
+    # Activity / movement
+    ("step_goal", "INTEGER", "summary", ("dailyStepGoal",), _number),
+    ("distance_meters", "REAL", "summary", ("totalDistanceMeters",), _number),
+    ("floors_ascended", "REAL", "summary", ("floorsAscended",), _number),
+    ("floors_descended", "REAL", "summary", ("floorsDescended",), _number),
+    ("floors_goal", "REAL", "summary", ("userFloorsAscendedGoal", "floorsAscendedGoal"), _number),
+    ("intensity_minutes_moderate", "INTEGER", "summary", ("moderateIntensityMinutes",), _number),
+    ("intensity_minutes_vigorous", "INTEGER", "summary", ("vigorousIntensityMinutes",), _number),
+    ("intensity_minutes_goal", "INTEGER", "summary", ("intensityMinutesGoal",), _number),
+    ("active_seconds", "INTEGER", "summary", ("activeSeconds",), _number),
+    ("highly_active_seconds", "INTEGER", "summary", ("highlyActiveSeconds",), _number),
+    ("sedentary_seconds", "INTEGER", "summary", ("sedentarySeconds",), _number),
+    ("bmr_calories", "REAL", "summary", ("bmrKilocalories",), _number),
+    # Heart rate
+    ("min_hr", "INTEGER", "heart_rate", ("minHeartRate",), _number),
+    ("max_hr", "INTEGER", "heart_rate", ("maxHeartRate",), _number),
+    ("resting_hr_7d_avg", "INTEGER", "heart_rate", ("lastSevenDaysAvgRestingHeartRate",), _number),
+    # Stress / Body Battery
+    ("stress_max", "INTEGER", "summary", ("maxStressLevel",), _number),
+    ("body_battery_high", "INTEGER", "summary", ("bodyBatteryHighestValue",), _number),
+    ("body_battery_low", "INTEGER", "summary", ("bodyBatteryLowestValue",), _number),
+    ("body_battery_charged", "INTEGER", "summary", ("bodyBatteryChargedValue",), _number),
+    ("body_battery_drained", "INTEGER", "summary", ("bodyBatteryDrainedValue",), _number),
+    # Respiration / SpO2
+    ("respiration_waking_avg", "REAL", "summary", ("avgWakingRespirationValue",), _number),
+    ("respiration_low", "REAL", "summary", ("lowestRespirationValue",), _number),
+    ("respiration_high", "REAL", "summary", ("highestRespirationValue",), _number),
+    ("spo2_avg", "REAL", "summary", ("averageSpo2",), _number),
+    ("spo2_low", "REAL", "summary", ("lowestSpo2",), _number),
+    # Sleep
+    ("sleep_score", "INTEGER", "sleep", ("dailySleepDTO.sleepScores.overall.value", "sleepScores.overall.value", "overallSleepScore"), _number),
+    ("sleep_score_qualifier", "TEXT", "sleep", ("dailySleepDTO.sleepScores.overall.qualifierKey", "sleepScores.overall.qualifierKey"), _text),
+    ("sleep_deep_seconds", "INTEGER", "sleep", ("deepSleepSeconds",), _number),
+    ("sleep_light_seconds", "INTEGER", "sleep", ("lightSleepSeconds",), _number),
+    ("sleep_rem_seconds", "INTEGER", "sleep", ("remSleepSeconds",), _number),
+    ("sleep_awake_seconds", "INTEGER", "sleep", ("awakeSleepSeconds",), _number),
+    ("sleep_awake_count", "INTEGER", "sleep", ("awakeCount",), _number),
+    ("sleep_start", "TEXT", "sleep", ("sleepStartTimestampLocal",), _local_timestamp),
+    ("sleep_end", "TEXT", "sleep", ("sleepEndTimestampLocal",), _local_timestamp),
+    ("sleep_respiration_avg", "REAL", "sleep", ("averageRespirationValue",), _number),
+    ("sleep_respiration_low", "REAL", "sleep", ("lowestRespirationValue",), _number),
+    ("sleep_respiration_high", "REAL", "sleep", ("highestRespirationValue",), _number),
+    ("sleep_stress_avg", "REAL", "sleep", ("avgSleepStress",), _number),
+    ("sleep_avg_hr", "REAL", "sleep", ("avgHeartRate",), _number),
+    ("sleep_need_minutes", "INTEGER", "sleep", ("sleepNeed.actual",), _number),
+    ("nap_seconds", "INTEGER", "sleep", ("napTimeSeconds",), _number),
+    ("body_battery_during_sleep", "INTEGER", "summary", ("bodyBatteryDuringSleep",), _number),
+    ("body_battery_at_wake", "INTEGER", "summary", ("bodyBatteryAtWakeTime",), _number),
+    ("stress_qualifier", "TEXT", "summary", ("stressQualifier",), _text),
+    ("stress_high_seconds", "INTEGER", "summary", ("highStressDuration",), _number),
+    # HRV
+    ("hrv_weekly_avg", "REAL", "hrv", ("weeklyAvg",), _number),
+    ("hrv_last_night_high", "REAL", "hrv", ("lastNight5MinHigh",), _number),
+    ("hrv_status", "TEXT", "hrv", ("hrvSummary.status", "status"), _text),
+    ("hrv_baseline_low", "REAL", "hrv", ("balancedLow",), _number),
+    ("hrv_baseline_high", "REAL", "hrv", ("balancedUpper",), _number),
+    ("hrv_feedback", "TEXT", "hrv", ("feedbackPhrase",), _text),
+]
+
+ORIGINAL_COLUMNS = {"steps", "active_calories", "total_calories", "resting_hr", "hrv_ms", "sleep_seconds", "stress_avg", "body_battery"}
+
+DAILY_ENDPOINTS: dict[str, Callable[[str], tuple[str, dict[str, Any]]]] = {
+    "summary": lambda day: ("/usersummary-service/usersummary/daily", {"calendarDate": day}),
+    "sleep": lambda day: ("/sleep-service/sleep/dailySleep", {"date": day}),
+    "hrv": lambda day: (f"/hrv-service/hrv/{day}", {}),
+    "heart_rate": lambda day: ("/wellness-service/wellness/dailyHeartRate", {"date": day}),
+}
+
+
+def ensure_schema(db: sqlite3.Connection) -> None:
+    """Add the Garmin raw table and any metric columns missing from older databases."""
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS garmin_raw_responses (
+               calendar_date TEXT NOT NULL,
+               endpoint TEXT NOT NULL,
+               payload_json TEXT,
+               fetched_at TEXT NOT NULL,
+               PRIMARY KEY (calendar_date, endpoint)
+           )"""
+    )
+    existing = {row[1] for row in db.execute("PRAGMA table_info(garmin_daily_metrics)")}
+    for column, sql_type, *_ in METRIC_FIELDS:
+        if column not in existing:
+            db.execute(f"ALTER TABLE garmin_daily_metrics ADD COLUMN {column} {sql_type}")
+    activity_columns = {row[1] for row in db.execute("PRAGMA table_info(imported_activities)")}
+    if "raw_json" not in activity_columns:
+        db.execute("ALTER TABLE imported_activities ADD COLUMN raw_json TEXT")
+
+
+def daily_metric(calendar_date: str, payloads: dict[str, Any]) -> dict[str, Any]:
+    record: dict[str, Any] = {"calendar_date": calendar_date}
+    for column, _type, endpoint, keys, convert in METRIC_FIELDS:
+        record[column] = convert(_find(payloads.get(endpoint), *keys))
+    record["source_json"] = json.dumps({name: _first_record(payloads.get(name)) for name in DAILY_ENDPOINTS})
+    return record
+
+
+def save_day(db: sqlite3.Connection, record: dict[str, Any], payloads: dict[str, Any], synced_at: str) -> None:
+    for endpoint, payload in payloads.items():
+        db.execute(
+            """INSERT INTO garmin_raw_responses (calendar_date, endpoint, payload_json, fetched_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(calendar_date, endpoint) DO UPDATE SET payload_json=excluded.payload_json, fetched_at=excluded.fetched_at""",
+            (record["calendar_date"], endpoint, json.dumps(payload), synced_at),
+        )
+    columns = [field[0] for field in METRIC_FIELDS]
+    # A null from Garmin (e.g. one endpoint failed) never erases a value we already have.
+    updates = ", ".join(f"{c}=COALESCE(excluded.{c}, garmin_daily_metrics.{c})" for c in columns)
+    db.execute(
+        f"""INSERT INTO garmin_daily_metrics (calendar_date, {', '.join(columns)}, source_json, synced_at)
+            VALUES (?, {', '.join('?' for _ in columns)}, ?, ?)
+            ON CONFLICT(calendar_date) DO UPDATE SET {updates}, source_json=excluded.source_json, synced_at=excluded.synced_at""",
+        (record["calendar_date"], *(record[c] for c in columns), record["source_json"], synced_at),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Activities
+# --------------------------------------------------------------------------- #
 
 def activity_from_api(raw: dict[str, Any]) -> dict[str, Any] | None:
     start = str(raw.get("startTimeLocal") or raw.get("startTimeGMT") or "")
@@ -131,93 +407,130 @@ def activity_from_api(raw: dict[str, Any]) -> dict[str, Any] | None:
     return normalized
 
 
-def daily_metric(calendar_date: str, summary: Any, sleep: Any, hrv: Any, heart_rate: Any) -> dict[str, Any]:
-    summary_record = _first_record(summary)
-    sleep_record = _first_record(sleep)
-    hrv_record = _first_record(hrv)
-    heart_record = _first_record(heart_rate)
-    return {
-        "calendar_date": calendar_date,
-        "steps": _number(_walk(summary_record, "totalSteps", "steps")),
-        "active_calories": _number(_walk(summary_record, "activeKilocalories", "activeCalories")),
-        "total_calories": _number(_walk(summary_record, "totalKilocalories", "totalCalories")),
-        "resting_hr": _number(_walk(heart_record, "restingHeartRate", "restingHR")),
-        "hrv_ms": _number(_walk(hrv_record, "lastNightAvg", "weeklyAvg", "hrvValue", "avgHrv")),
-        "sleep_seconds": _number(_walk(sleep_record, "sleepTimeSeconds", "sleepSeconds", "durationInSeconds")),
-        "stress_avg": _number(_walk(summary_record, "averageStressLevel", "avgStressLevel")),
-        "body_battery": _number(_walk(summary_record, "bodyBatteryMostRecentValue", "bodyBattery")),
-        "source_json": json.dumps({"summary": summary_record, "sleep": sleep_record, "hrv": hrv_record, "heart_rate": heart_record}),
-    }
+def save_activities(db: sqlite3.Connection, activities: list[Any], imported_at: str) -> int:
+    imported = 0
+    for raw in activities:
+        if not isinstance(raw, dict):
+            continue
+        activity = activity_from_api(raw)
+        if not activity:
+            continue
+        cursor = db.execute(
+            """INSERT INTO imported_activities
+               (id, source, activity_date, activity_type, title, distance_miles, duration_minutes, average_hr, max_hr, elevation_feet, details_json, raw_json, imported_at)
+               VALUES (?, 'Garmin API', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 source=excluded.source, activity_date=excluded.activity_date, activity_type=excluded.activity_type,
+                 title=excluded.title, distance_miles=excluded.distance_miles, duration_minutes=excluded.duration_minutes,
+                 average_hr=excluded.average_hr, max_hr=excluded.max_hr, elevation_feet=excluded.elevation_feet,
+                 details_json=excluded.details_json, raw_json=excluded.raw_json, imported_at=excluded.imported_at""",
+            (activity["id"], activity["activity_date"], activity["activity_type"], activity["title"], activity["distance_miles"], activity["duration_minutes"], activity["average_hr"], activity["max_hr"], activity["elevation_feet"], json.dumps(activity["details"]), json.dumps(raw), imported_at),
+        )
+        imported += int(bool(cursor.rowcount))
+    return imported
 
 
-def run_sync(days: int = 2) -> dict[str, Any]:
-    """Sync a small rolling history. Safe to run repeatedly; rows upsert by date/ID."""
+# --------------------------------------------------------------------------- #
+# Sync
+# --------------------------------------------------------------------------- #
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def run_sync(days: int = 2, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Sync a rolling history, newest day first. Safe to run repeatedly; rows upsert by date/ID.
+
+    Returns status "success", or "partial" if the sync stopped early (saved days
+    are kept). Raises GarminSyncError only when nothing could be saved.
+    """
     days = max(1, min(int(days), 30))
+    report = progress or (lambda _message: None)
     initialize()
-    started = datetime.now().astimezone().isoformat(timespec="seconds")
+    started = _now()
     with connection() as db:
+        ensure_schema(db)
         log_id = db.execute("INSERT INTO garmin_sync_log (started_at, status, message) VALUES (?, 'running', '')", (started,)).lastrowid
+
+    def update_log(status: str, message: str, imported: int, saved: int, finished: bool) -> None:
+        with connection() as db:
+            db.execute(
+                "UPDATE garmin_sync_log SET finished_at = ?, status = ?, activities_imported = ?, metrics_updated = ?, message = ? WHERE id = ?",
+                (_now() if finished else None, status, imported, saved, message, log_id),
+            )
+
+    imported = 0
+    saved = 0
+    endpoint_failures: list[str] = []
+    end = date.today()
+    start = end - timedelta(days=days - 1)
     try:
         token = access_token()
-        end = date.today()
-        start = end - timedelta(days=days - 1)
-        activities_payload = garmin_get(
-            "/activitylist-service/activities/search/activities", token,
-            start=0, limit=100, startDate=start.isoformat(), endDate=end.isoformat(),
-        )
+        try:
+            activities_payload = garmin_get(
+                "/activitylist-service/activities/search/activities", token,
+                start=0, limit=100, startDate=start.isoformat(), endDate=end.isoformat(),
+            )
+        except GarminEndpointError as error:
+            endpoint_failures.append(f"activities ({error.status})")
+            activities_payload = None
         activities = activities_payload.get("activities", []) if isinstance(activities_payload, dict) else (activities_payload or [])
-        imported = 0
         with connection() as db:
-            for raw in activities:
-                if not isinstance(raw, dict):
-                    continue
-                activity = activity_from_api(raw)
-                if not activity:
-                    continue
-                cursor = db.execute(
-                    """INSERT INTO imported_activities
-                       (id, source, activity_date, activity_type, title, distance_miles, duration_minutes, average_hr, max_hr, elevation_feet, details_json, imported_at)
-                       VALUES (?, 'Garmin API', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(id) DO UPDATE SET
-                         source=excluded.source, activity_date=excluded.activity_date, activity_type=excluded.activity_type,
-                         title=excluded.title, distance_miles=excluded.distance_miles, duration_minutes=excluded.duration_minutes,
-                         average_hr=excluded.average_hr, max_hr=excluded.max_hr, elevation_feet=excluded.elevation_feet,
-                         details_json=excluded.details_json, imported_at=excluded.imported_at""",
-                    (activity["id"], activity["activity_date"], activity["activity_type"], activity["title"], activity["distance_miles"], activity["duration_minutes"], activity["average_hr"], activity["max_hr"], activity["elevation_feet"], json.dumps(activity["details"]), started),
-                )
-                imported += int(bool(cursor.rowcount))
+            imported = save_activities(db, activities, started)
+        report(f"Activities: {imported} saved.")
+        update_log("running", "", imported, saved, finished=False)
 
-        metrics_updated = 0
-        with connection() as db:
-            for offset in range(days):
-                current = (end - timedelta(days=offset)).isoformat()
-                summary = garmin_get("/usersummary-service/usersummary/daily", token, calendarDate=current)
-                sleep = garmin_get("/sleep-service/sleep/dailySleep", token, date=current)
-                hrv = garmin_get(f"/hrv-service/hrv/{current}", token)
-                heart = garmin_get("/wellness-service/wellness/dailyHeartRate", token, date=current)
-                record = daily_metric(current, summary, sleep, hrv, heart)
-                db.execute(
-                    """INSERT INTO garmin_daily_metrics
-                       (calendar_date, steps, active_calories, total_calories, resting_hr, hrv_ms, sleep_seconds, stress_avg, body_battery, source_json, synced_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(calendar_date) DO UPDATE SET steps=excluded.steps, active_calories=excluded.active_calories,
-                       total_calories=excluded.total_calories, resting_hr=excluded.resting_hr, hrv_ms=excluded.hrv_ms,
-                       sleep_seconds=excluded.sleep_seconds, stress_avg=excluded.stress_avg, body_battery=excluded.body_battery,
-                       source_json=excluded.source_json, synced_at=excluded.synced_at""",
-                    (record["calendar_date"], record["steps"], record["active_calories"], record["total_calories"], record["resting_hr"], record["hrv_ms"], record["sleep_seconds"], record["stress_avg"], record["body_battery"], record["source_json"], started),
-                )
-                metrics_updated += 1
-            db.execute("UPDATE garmin_sync_log SET finished_at = ?, status = 'success', activities_imported = ?, metrics_updated = ?, message = ? WHERE id = ?", (datetime.now().astimezone().isoformat(timespec="seconds"), imported, metrics_updated, "Sync complete.", log_id))
-        return {"status": "success", "activities_imported": imported, "metrics_updated": metrics_updated}
-    except GarminSyncError as error:
-        with connection() as db:
-            db.execute("UPDATE garmin_sync_log SET finished_at = ?, status = 'error', message = ? WHERE id = ?", (datetime.now().astimezone().isoformat(timespec="seconds"), str(error), log_id))
-        raise
+        for offset in range(days):
+            current = (end - timedelta(days=offset)).isoformat()
+            payloads: dict[str, Any] = {}
+            for name, endpoint in DAILY_ENDPOINTS.items():
+                path, params = endpoint(current)
+                try:
+                    payloads[name] = garmin_get(path, token, **params)
+                except GarminEndpointError as error:
+                    endpoint_failures.append(f"{current} {name} ({error.status})")
+            record = daily_metric(current, payloads)
+            with connection() as db:
+                save_day(db, record, payloads, _now())
+            saved += 1
+            update_log("running", "", imported, saved, finished=False)
+            report(f"{current}: saved ({len(payloads)}/{len(DAILY_ENDPOINTS)} endpoints).")
+    except GarminFatalError as error:
+        if saved == 0 and imported == 0:
+            update_log("error", str(error), imported, saved, finished=True)
+            raise
+        message = f"Stopped after {saved} of {days} days: {error} Saved days were kept; run the sync again to finish."
+        update_log("partial", message, imported, saved, finished=True)
+        return {"status": "partial", "activities_imported": imported, "metrics_updated": saved, "message": message}
+
+    message = "Sync complete."
+    if endpoint_failures:
+        shown = ", ".join(endpoint_failures[:5]) + (" …" if len(endpoint_failures) > 5 else "")
+        message = f"Sync complete; {len(endpoint_failures)} request(s) failed and were skipped: {shown}"
+    update_log("success", message, imported, saved, finished=True)
+    return {"status": "success", "activities_imported": imported, "metrics_updated": saved, "message": message}
+
+
+def rebuild_from_raw() -> int:
+    """Re-derive every garmin_daily_metrics column from stored raw responses (no API calls)."""
+    initialize()
+    with connection() as db:
+        ensure_schema(db)
+        by_day: dict[str, dict[str, Any]] = {}
+        for row in db.execute("SELECT calendar_date, endpoint, payload_json FROM garmin_raw_responses"):
+            by_day.setdefault(row["calendar_date"], {})[row["endpoint"]] = json.loads(row["payload_json"]) if row["payload_json"] else None
+        for day, payloads in by_day.items():
+            save_day(db, daily_metric(day, payloads), {}, _now())
+    return len(by_day)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Sync private Garmin data into Health Hub.")
     parser.add_argument("--days", type=int, default=int(os.getenv("GARMIN_SYNC_DAYS", "2")), help="Rolling days to refresh (1–30).")
+    parser.add_argument("--rebuild", action="store_true", help="Rebuild metric columns from stored raw responses without calling Garmin.")
     args = parser.parse_args()
-    result = run_sync(args.days)
-    print(f"Garmin sync complete: {result['activities_imported']} activities, {result['metrics_updated']} daily records.")
+    if args.rebuild:
+        print(f"Rebuilt {rebuild_from_raw()} days from stored raw responses.")
+        raise SystemExit(0)
+    result = run_sync(args.days, progress=lambda line: print(line, flush=True))
+    print(f"Garmin sync {result['status']}: {result['activities_imported']} activities, {result['metrics_updated']} daily records. {result['message']}")
