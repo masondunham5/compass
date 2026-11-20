@@ -1,4 +1,4 @@
-const CACHE = "health-hub-v2";
+const CACHE = "health-hub-v3";
 
 self.addEventListener("install", event => {
   event.waitUntil(

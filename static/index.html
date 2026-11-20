@@ -3,82 +3,145 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#0d0f12">
+    <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-20-ui">
     <title>Health Hub</title>
   </head>
   <body>
-    <div id="startup-diagnostic" hidden role="alert" style="position:fixed;z-index:9999;left:16px;right:16px;bottom:16px;padding:14px 16px;border:1px solid #8b5cf6;border-radius:12px;background:#201536;color:#fff;font:600 14px system-ui, sans-serif"></div>
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M5 13.5h3.1l1.8-5 3.1 9 1.8-4H19"/><path d="M12 21s-7-4.2-7-10a4 4 0 0 1 7-2.7A4 4 0 0 1 19 11c0 5.8-7 10-7 10Z"/></svg></span>
-          <span>HEALTH <b>HUB</b></span>
-        </div>
-        <p class="nav-label">YOUR HEALTH</p>
-        <nav class="side-nav" aria-label="Main navigation">
-          <button class="nav-item active" data-view="plan"><span>▦</span> Today</button>
-          <button class="nav-item" data-view="health"><span>♡</span> Recovery</button>
-          <p class="nav-label subnav-label">TRAINING</p>
-          <button class="nav-item" data-view="routines"><span>☷</span> Training plan</button>
-          <button class="nav-item" data-view="track"><span>◉</span> Active workout</button>
-          <button class="nav-item" data-view="history"><span>◷</span> History</button>
-          <button class="nav-item" data-view="insights"><span>⌁</span> Progress</button>
-        </nav>
-        <div class="sidebar-bottom"><button class="nav-item" data-view="settings"><span>⚙</span> Settings</button><small>Private & local<br>Sync-ready</small></div>
-      </aside>
-      <main class="main-content">
-        <header class="topbar">
-          <div><p class="eyebrow">PRIVATE HEALTH DASHBOARD</p><h1 id="page-title">Your health today</h1></div>
-          <div class="top-actions"><span id="sync" class="sync">● Local</span><button class="install-button" id="install-app" hidden>Install app</button><button class="icon-button" id="quick-checkin" aria-label="Open daily check-in" title="Daily check-in">＋</button></div>
-        </header>
-        <section id="view-plan" class="view active">
-          <div class="welcome-row"><div><p class="eyebrow">TODAY</p><h2 id="today">Loading your health dashboard…</h2><p id="checkin-copy">Health context helps the app suggest a realistic training day—not force catch-up.</p></div><div class="hero-actions"><button class="secondary" id="adjust-plan-button" hidden>Adjust block</button><button class="secondary" id="build-plan-button">Build a block</button><button class="primary" id="health-checkin-button">Log health</button></div></div>
-          <div class="dashboard-grid">
-            <section class="panel schedule-panel"><div class="panel-heading"><div><p class="eyebrow">WEEKLY SCHEDULE</p><h3>Upcoming sessions</h3></div><span id="summary" class="muted"></span></div><div id="sessions" class="sessions"></div></section>
-            <aside class="right-rail">
-              <section class="panel mini-panel"><p class="eyebrow">WEEKLY BALANCE</p><h3 id="balance-title">Building your week</h3><div class="metric-row"><span>Sessions</span><strong id="balance-sessions">—</strong></div><div class="progress"><i id="session-progress"></i></div><div class="metric-row"><span>Training volume</span><strong id="balance-volume">—</strong></div></section>
-              <section class="panel mini-panel health-mini"><p class="eyebrow">RECOVERY SIGNAL</p><h3 id="health-status">No check-in yet</h3><div class="metric-row"><span>Sleep average</span><strong id="health-sleep">—</strong></div><div class="metric-row"><span>Weight trend</span><strong id="health-weight">—</strong></div><button class="outline full" id="open-health-button">Open recovery</button></section>
-              <section class="panel mini-panel suggestion"><p class="eyebrow">SMART SUGGESTION</p><h3 id="suggestion-title">Check in to personalize today</h3><p id="suggestion-copy">Share your available time, readiness, and soreness before you train.</p></section>
-            </aside>
+    <div id="startup-diagnostic" hidden role="alert"></div>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-today" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+      <symbol id="i-recovery" viewBox="0 0 24 24"><path d="M2.5 12h4.5l2.5-5 4 10 2.5-5h5.5"/></symbol>
+      <symbol id="i-train" viewBox="0 0 24 24"><path d="M6.5 7v10M3.5 9.5v5M17.5 7v10M20.5 9.5v5M6.5 12h11"/></symbol>
+      <symbol id="i-progress" viewBox="0 0 24 24"><path d="M3.5 3.5v17h17"/><path d="m7 15 4-4.5 3 2.5 5.5-6"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.6"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    </svg>
+
+    <div class="app">
+      <main class="screens">
+        <!-- TODAY -->
+        <section id="view-today" class="view active" aria-labelledby="today-title">
+          <header class="page-head">
+            <div><p class="kicker" id="today-kicker">&nbsp;</p><h1 id="today-title">Today</h1></div>
+            <button class="icon-btn" id="today-checkin" type="button" aria-label="Daily check-in" title="Daily check-in"><svg><use href="#i-plus"/></svg></button>
+          </header>
+          <div class="week-strip" id="week-strip" role="tablist" aria-label="This week"></div>
+          <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
+          <div id="today-extra"></div>
+          <p class="caption" id="today-stats-caption" hidden></p>
+          <button class="card stat-strip" id="today-stats" type="button" aria-label="Open recovery details"></button>
+          <p class="up-next" id="up-next" hidden></p>
+        </section>
+
+        <!-- RECOVERY -->
+        <section id="view-recovery" class="view" aria-labelledby="recovery-title">
+          <header class="page-head"><div><p class="kicker" id="recovery-kicker">&nbsp;</p><h1 id="recovery-title">Recovery</h1></div></header>
+          <article class="card sleep-card" id="sleep-card"></article>
+          <article class="card metric-list" id="recovery-metrics"></article>
+          <div class="sync-row">
+            <p id="sync-status" class="muted">Checking Garmin…</p>
+            <button class="btn btn-outline" id="garmin-sync" type="button">Sync now</button>
           </div>
+          <p id="garmin-sync-message" class="note" hidden></p>
+
+          <h2 class="section-title">Readiness</h2>
+          <article class="card readiness-card">
+            <div class="readiness-top"><div><b id="readiness-title">Calculating…</b><p id="readiness-guidance" class="muted"></p></div><span class="score-ring" id="readiness-score">—</span></div>
+            <ul id="readiness-reasons" class="reason-list"></ul>
+            <div class="readiness-foot"><p class="faint">Rules only · no AI · never changes your plan.</p><button class="btn btn-ghost" id="recovery-checkin" type="button">Log check-in</button></div>
+          </article>
+
+          <div class="section-head"><h2 class="section-title">Trends</h2><div class="segmented small" role="group" aria-label="Trend range"><button type="button" class="active" data-garmin-days="7">7 days</button><button type="button" data-garmin-days="30">30 days</button></div></div>
+          <div class="trend-grid" id="trend-grid"></div>
+
+          <h2 class="section-title">Endurance</h2>
+          <div class="tile-grid" id="endurance-tiles"></div>
+
+          <h2 class="section-title">Check-in log</h2>
+          <div id="checkin-log" class="stack"></div>
+
+          <h2 class="section-title">Sync history</h2>
+          <article class="card list-card" id="sync-history"></article>
         </section>
-        <section id="view-health" class="view">
-          <div class="view-heading"><p class="eyebrow">RECOVERY &amp; BODY</p><h2>Health context, not pressure</h2><p>Track sleep, energy, soreness, stress, nutrition consistency, and optional weight. Suggestions are conservative and never change your plan without you.</p></div>
-          <div class="health-grid"><section class="panel health-score"><p class="eyebrow">TODAY'S READINESS</p><strong id="health-readiness">Log a check-in</strong><p id="health-recommendation">A quick health check gives training recommendations useful context.</p><button class="primary" id="health-checkin-button-secondary">Log today’s health</button></section><section class="panel health-metrics"><div><span>Check-ins this week</span><b id="health-checkins">0 / 7</b></div><div><span>Average sleep</span><b id="health-average-sleep">—</b></div><div><span>Imported run miles</span><b id="health-run-miles">0 mi</b></div><div><span>Protein consistency</span><b id="health-protein-status">—</b></div></section></div>
-          <section class="panel rule-recommendation"><div class="panel-heading"><div><p class="eyebrow">TODAY'S TRAINING DECISION</p><h3 id="rule-recommendation-title">Calculating your recommendation…</h3></div><span id="rule-recommendation-score" class="readiness-score">—</span></div><p id="rule-recommendation-copy" class="garmin-copy"></p><ul id="rule-recommendation-reasons" class="rule-reasons"></ul><p class="rule-note">Rules only · no AI model · never changes your plan automatically.</p></section>
-          <section class="panel garmin-dashboard"><div class="panel-heading"><div><p class="eyebrow">GARMIN DAILY SYNC</p><h3 id="garmin-connection-title">Garmin not connected</h3></div><div class="sync-actions"><button class="outline" id="garmin-backfill" title="Fetch the last 30 days once">Backfill 30 days</button><button class="outline" id="garmin-sync-now">Sync now</button></div></div><p id="garmin-connection-copy" class="garmin-copy">Add a Personal API key in Settings when you are ready. Health Hub will keep it only on this computer.</p><div class="garmin-metric-grid"><div><span>Last sync</span><b id="garmin-last-sync">—</b></div><div><span>Sleep average</span><b id="garmin-sleep">—</b></div><div><span>HRV average</span><b id="garmin-hrv">—</b></div><div><span>Steps average</span><b id="garmin-steps">—</b></div></div><p id="garmin-sync-message" class="muted"></p></section>
-          <section class="performance-dashboard"><div class="health-dashboard-toolbar"><div><p class="eyebrow">ENDURANCE PROGRESS</p><h3>Performance context</h3></div><span class="metric-note">Your data, not a diagnosis</span></div><div class="performance-grid"><article class="panel performance-card"><span>VO₂ max</span><b id="performance-vo2">—</b><small id="performance-vo2-note">Garmin-reported when available</small></article><article class="panel performance-card"><span>Endurance score</span><b id="performance-endurance">—</b><small id="performance-endurance-note">Needs a running baseline</small></article><article class="panel performance-card"><span>Run volume</span><b id="performance-run-miles">—</b><small id="performance-run-note">Last 7 days</small></article><article class="panel performance-card"><span>Resting HR</span><b id="performance-rhr">—</b><small>Latest Garmin daily value</small></article></div></section>
-          <section class="health-dashboard-toolbar"><div><p class="eyebrow">GARMIN METRICS</p><h3>Recovery trends</h3></div><div class="range-toggle" role="group" aria-label="Dashboard range"><button type="button" class="active" data-garmin-days="7">7 days</button><button type="button" data-garmin-days="30">30 days</button></div></section>
-          <section class="garmin-trend-grid"><article class="panel trend-card"><div class="trend-heading"><span>Sleep</span><b id="trend-sleep-value">—</b></div><div class="trend-chart" id="trend-sleep-chart"></div><small>Average sleep duration</small></article><article class="panel trend-card"><div class="trend-heading"><span>HRV</span><b id="trend-hrv-value">—</b></div><div class="trend-chart" id="trend-hrv-chart"></div><small>Average overnight HRV</small></article><article class="panel trend-card"><div class="trend-heading"><span>Resting HR</span><b id="trend-rhr-value">—</b></div><div class="trend-chart" id="trend-rhr-chart"></div><small>Recovery context, not a diagnosis</small></article><article class="panel trend-card"><div class="trend-heading"><span>Body Battery</span><b id="trend-battery-value">—</b></div><div class="trend-chart" id="trend-battery-chart"></div><small>Garmin’s daily energy estimate</small></article><article class="panel trend-card"><div class="trend-heading"><span>Stress</span><b id="trend-stress-value">—</b></div><div class="trend-chart" id="trend-stress-chart"></div><small>Average Garmin stress score</small></article><article class="panel trend-card"><div class="trend-heading"><span>Steps</span><b id="trend-steps-value">—</b></div><div class="trend-chart" id="trend-steps-chart"></div><small>Daily movement, not a training target</small></article></section>
-          <section class="panel sync-history-panel"><div class="panel-heading"><div><p class="eyebrow">SYNC HISTORY</p><h3>Recent Garmin pulls</h3></div></div><div id="garmin-sync-history" class="sync-history-list"></div></section>
-          <section class="panel health-history"><div class="panel-heading"><div><p class="eyebrow">RECENT HEALTH LOG</p><h3>Last seven days</h3></div></div><div id="health-history-list" class="health-history-list"></div></section>
+
+        <!-- TRAIN -->
+        <section id="view-train" class="view" aria-labelledby="train-title">
+          <header class="page-head"><div><p class="kicker" id="train-kicker">&nbsp;</p><h1 id="train-title">Train</h1></div></header>
+          <article class="card block-card" id="block-card"></article>
+          <div class="segmented" role="tablist" aria-label="Training lists"><button type="button" class="active" data-train-tab="plan">Upcoming</button><button type="button" data-train-tab="history">History</button></div>
+          <div id="train-plan" class="stack"></div>
+          <div id="train-history" class="stack" hidden></div>
         </section>
-        <section id="view-track" class="view"><div id="active-session" class="active-session empty-state"><span class="empty-icon">◎</span><h2>Select a session to start logging</h2><p>Your targets, last performance, quick set logging, and rest timer will appear here.</p><button class="primary" data-view="plan">Browse sessions</button></div></section>
-        <section id="view-routines" class="view"><div class="view-heading"><p class="eyebrow">ROUTINE BUILDER</p><h2>Your plan library</h2><p>Each planned workout is a reusable session template. Start a session to log every set on your phone.</p></div><div id="routine-list" class="routine-list"></div></section>
-        <section id="view-history" class="view"><div class="view-heading"><p class="eyebrow">WORKOUT ARCHIVE</p><h2>Completed workouts</h2><p>Every finished session remains here with its exercises and number of logged sets.</p></div><div id="history-list" class="routine-list"></div></section>
-        <section id="view-insights" class="view"><div class="view-heading"><p class="eyebrow">PROGRESS TRACKER</p><h2>Strength progress</h2><p>Estimated 1RM uses your best logged set. Tap an exercise to inspect its full history.</p></div><div class="insight-grid"><section class="panel insight-card"><span>Completed sessions</span><strong id="insight-sessions">0</strong></section><section class="panel insight-card"><span>Logged volume</span><strong id="insight-volume">0 lb</strong></section><section class="panel insight-card"><span>Next best action</span><strong id="insight-action">Log a session</strong></section></div><div id="progress-list" class="progress-list"></div><section id="exercise-detail" class="exercise-detail panel" hidden></section></section>
-        <section id="view-settings" class="view"><div class="view-heading"><p class="eyebrow">SETTINGS</p><h2>Private by design</h2><p>Health Hub runs against its local database. Garmin imports stay on your server; no Garmin password or unsupported account connection is stored.</p></div><section class="panel settings-card"><p class="eyebrow">GARMIN PERSONAL API</p><h3>Connect this private server</h3><p>Copy <code>.env.example</code> to <code>.env</code> on this computer, paste your key after <code>GARMIN_PERSONAL_API_KEY=</code>, add its expiration date, then run a manual sync. The key never appears in this page, the database, or GitHub.</p><p id="garmin-settings-status" class="muted">Checking Garmin status…</p></section></section>
+
+        <!-- ACTIVE WORKOUT (reached from Today or Train) -->
+        <section id="view-workout" class="view" aria-label="Workout"><div id="workout"></div></section>
+
+        <!-- PROGRESS -->
+        <section id="view-progress" class="view" aria-labelledby="progress-title">
+          <header class="page-head">
+            <div><p class="kicker">Strength</p><h1 id="progress-title">Progress</h1></div>
+            <button class="icon-btn" type="button" data-view="settings" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
+          </header>
+          <div class="card stat-strip static" id="progress-stats"></div>
+          <h2 class="section-title">Lifts</h2>
+          <article class="card list-card" id="progress-list"></article>
+        </section>
+
+        <!-- SETTINGS -->
+        <section id="view-settings" class="view" aria-labelledby="settings-title">
+          <header class="page-head"><div><button class="back-link" type="button" data-view="progress"><svg><use href="#i-back"/></svg>Progress</button><h1 id="settings-title">Settings</h1></div></header>
+          <article class="card prose-card">
+            <h3>Garmin Personal API</h3>
+            <p id="garmin-settings-status" class="muted">Checking Garmin status…</p>
+            <p>Copy <code>.env.example</code> to <code>.env</code> on this computer, paste your key after <code>GARMIN_PERSONAL_API_KEY=</code>, add its expiration date, then sync. The key never appears in this page, the database, or GitHub.</p>
+          </article>
+          <article class="card prose-card">
+            <h3>Private by design</h3>
+            <p>Health Hub runs against its local database. Garmin data stays on this server; no Garmin password is stored.</p>
+            <button class="btn btn-primary" id="install-app" type="button" hidden>Install app</button>
+          </article>
+        </section>
       </main>
-      <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active" data-view="plan"><span>▦</span>Today</button><button data-view="health"><span>♡</span>Health</button><button data-view="track"><span>◉</span>Log</button><button data-view="insights"><span>⌁</span>Progress</button></nav>
+
+      <nav class="tabbar" aria-label="Main">
+        <button type="button" class="active" data-view="today"><svg><use href="#i-today"/></svg><span>Today</span></button>
+        <button type="button" data-view="recovery"><svg><use href="#i-recovery"/></svg><span>Recovery</span></button>
+        <button type="button" data-view="train"><svg><use href="#i-train"/></svg><span>Train</span></button>
+        <button type="button" data-view="progress"><svg><use href="#i-progress"/></svg><span>Progress</span></button>
+      </nav>
     </div>
-    <dialog id="checkin-dialog"><form method="dialog"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="eyebrow">DAILY READINESS</p><h2>How does today feel?</h2><p class="muted">The app will suggest a realistic session, not force a catch-up day.</p><label>Time available <span>minutes</span><input id="minutes" type="number" value="60" min="0" max="360"></label><label>Readiness <span>1 low — 10 great</span><input id="readiness" type="range" value="7" min="1" max="10"></label><label>Soreness <span>1 fresh — 10 high</span><input id="soreness" type="range" value="3" min="1" max="10"></label><label>Location<select id="location"><option>Full gym</option><option>Apartment gym</option><option>Outdoors</option><option>No equipment</option></select></label><button class="primary full" value="default" id="submit-checkin">Build today’s suggestion</button></form></dialog>
-    <dialog id="health-dialog"><form id="health-form"><button class="dialog-close" type="button" aria-label="Close">×</button><p class="eyebrow">DAILY HEALTH CHECK-IN</p><h2>How are you doing?</h2><p class="muted">This supports training decisions; it is not medical advice or diagnosis.</p><div class="form-grid"><label>Sleep <span>hours</span><input id="health-sleep-hours" type="number" min="0" max="24" step=".1" value="7"></label><label>Weight <span>optional · lb</span><input id="health-weight-lbs" type="number" min="50" max="700" step=".1"></label></div><label>Sleep quality <span>1 poor — 10 excellent</span><input id="health-sleep-quality" type="range" min="1" max="10" value="7"></label><label>Energy <span>1 low — 10 high</span><input id="health-energy" type="range" min="1" max="10" value="7"></label><label>Soreness <span>1 fresh — 10 high</span><input id="health-soreness" type="range" min="1" max="10" value="3"></label><label>Stress <span>1 low — 10 high</span><input id="health-stress" type="range" min="1" max="10" value="4"></label><label class="toggle-row"><input id="health-protein" type="checkbox"><span><b>I met my protein goal</b><small>A simple consistency signal, not calorie tracking.</small></span></label><label>Notes <textarea id="health-notes" rows="3" placeholder="Anything relevant: poor sleep, travel, illness, a hard day, etc."></textarea></label><button class="primary full" type="submit">Save health check-in</button></form></dialog>
-    <dialog id="plan-dialog"><form id="plan-form"><button class="dialog-close" type="button" value="cancel" aria-label="Close">×</button><p class="eyebrow">COLLABORATIVE BLOCK BUILDER</p><h2 id="plan-dialog-heading">Build your next block</h2><p class="muted" id="plan-dialog-copy">Start with an honest baseline. You will review every session before it becomes active.</p><label>Block name<input id="plan-name" value="Strength &amp; endurance rebuild" maxlength="80"></label><label>Goals <span>One per line, in priority order</span><textarea id="plan-goals" rows="4">Build strength&#10;Build muscle&#10;Improve running endurance</textarea></label><label>Training split<select id="plan-split"><option value="body-part-balanced">Body-part emphasis — chest/tri/shoulders and back/biceps separate</option><option value="push-pull-legs">Push / Pull / Legs</option><option value="balanced-upper-lower">Balanced upper / lower</option><option value="full-body">Full body</option></select><span id="split-help">Best for your preference: separate chest/tri/shoulders, back/biceps, and lower-body sessions.</span></label><label class="toggle-row"><input id="plan-mobility" type="checkbox"><span><b>Add a dedicated mobility/recovery session</b><small>Leave this off if mobility is not a focus for this block.</small></span></label><div class="form-grid"><label>Weeks<input id="plan-weeks" type="number" value="10" min="4" max="24"></label><label>Lift days / week<input id="plan-lifting-days" type="number" value="5" min="2" max="6"></label><label>Run days / week<input id="plan-run-days" type="number" value="3" min="0" max="5"></label><label>Starting miles / week<input id="plan-miles" type="number" value="6" min="0" max="50" step=".5"></label></div><label>Typical session time <span>minutes</span><input id="plan-minutes" type="number" value="60" min="20" max="180"></label><label>Exercises to avoid or replace<input id="plan-avoid" value="Bulgarian split squats"></label><p id="plan-form-status" class="form-status" hidden></p><button class="primary full" type="submit">Create review draft</button></form></dialog>
-    <dialog id="plan-review-dialog"><div id="plan-review"></div></dialog>
-    <dialog id="session-editor-dialog"><form id="session-editor-form"><button class="dialog-close" type="button" aria-label="Close">×</button><p class="eyebrow">WORKOUT CONTROL</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or mark it cancelled. Existing logged sets remain in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="9"></textarea></label><button class="secondary full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="editor-actions"><button class="danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="primary" type="submit">Save changes</button></div></form></dialog>
+
+    <!-- Session sheet: details + actions for one planned session -->
+    <dialog id="session-sheet" class="sheet"><div id="session-sheet-body"></div></dialog>
+
+    <!-- Exercise history sheet -->
+    <dialog id="exercise-sheet" class="sheet"><div id="exercise-sheet-body"></div></dialog>
+
+    <dialog id="health-dialog" class="sheet"><form id="health-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Daily check-in</p><h2>How are you doing?</h2><p class="muted">Energy and soreness feed today's readiness score. Not medical advice.</p><div class="form-grid"><label>Sleep <span>hours</span><input id="health-sleep-hours" type="number" min="0" max="24" step=".1" value="7"></label><label>Weight <span>optional · lb</span><input id="health-weight-lbs" type="number" min="50" max="700" step=".1"></label></div><label>Sleep quality <span>1 poor — 10 excellent</span><input id="health-sleep-quality" type="range" min="1" max="10" value="7"></label><label>Energy <span>1 low — 10 high</span><input id="health-energy" type="range" min="1" max="10" value="7"></label><label>Soreness <span>1 fresh — 10 high</span><input id="health-soreness" type="range" min="1" max="10" value="3"></label><label>Stress <span>1 low — 10 high</span><input id="health-stress" type="range" min="1" max="10" value="4"></label><label class="toggle-row"><input id="health-protein" type="checkbox"><span><b>I met my protein goal</b><small>A simple consistency signal, not calorie tracking.</small></span></label><label>Notes <textarea id="health-notes" rows="3" placeholder="Poor sleep, travel, illness, a hard day…"></textarea></label><button class="btn btn-primary full" type="submit">Save check-in</button></form></dialog>
+
+    <dialog id="plan-dialog" class="sheet"><form id="plan-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Block builder</p><h2 id="plan-dialog-heading">Build your next block</h2><p class="muted" id="plan-dialog-copy">Start with an honest baseline. You will review every session before it becomes active.</p><label>Block name<input id="plan-name" value="Strength &amp; endurance rebuild" maxlength="80"></label><label>Goals <span>One per line, in priority order</span><textarea id="plan-goals" rows="4">Build strength&#10;Build muscle&#10;Improve running endurance</textarea></label><label>Training split<select id="plan-split"><option value="body-part-balanced">Body-part emphasis — chest/tri/shoulders and back/biceps separate</option><option value="push-pull-legs">Push / Pull / Legs</option><option value="balanced-upper-lower">Balanced upper / lower</option><option value="full-body">Full body</option></select><span id="split-help"></span></label><label class="toggle-row"><input id="plan-mobility" type="checkbox"><span><b>Add a dedicated mobility/recovery session</b><small>Leave this off if mobility is not a focus for this block.</small></span></label><div class="form-grid"><label>Weeks<input id="plan-weeks" type="number" value="10" min="4" max="24"></label><label>Lift days / week<input id="plan-lifting-days" type="number" value="5" min="2" max="6"></label><label>Run days / week<input id="plan-run-days" type="number" value="3" min="0" max="5"></label><label>Starting miles / week<input id="plan-miles" type="number" value="6" min="0" max="50" step=".5"></label></div><label>Typical session time <span>minutes</span><input id="plan-minutes" type="number" value="60" min="20" max="180"></label><label>Exercises to avoid or replace<input id="plan-avoid" value="Bulgarian split squats"></label><p id="plan-form-status" class="note error" hidden></p><button class="btn btn-primary full" type="submit">Create review draft</button></form></dialog>
+
+    <dialog id="plan-review-dialog" class="sheet"><div id="plan-review"></div></dialog>
+
+    <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
+
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-18-2" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-20-ui" onerror="window.__healthHubBootState='failed: script-error'"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;
         const diagnostic = document.getElementById("startup-diagnostic");
         diagnostic.hidden = false;
-        diagnostic.textContent = window.__healthHubBootState === "script-error"
-          ? "Health Hub could not load its interactive app script. You are likely opening an old copy or a file:// page."
-          : "Health Hub's script started but did not finish initializing. Send a screenshot of this message so it can be repaired."
-      }, 1200);
+        diagnostic.textContent = "Health Hub's script started but did not finish initializing. Reload the page; if this stays, send a screenshot of this message.";
+      }, 1500);
     </script>
   </body>
 </html>

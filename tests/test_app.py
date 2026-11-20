@@ -57,6 +57,21 @@ def test_deterministic_recommendation_preserves_a_good_training_day():
     assert result["target_session"]["id"] == "today"
 
 
+def test_short_day_keeps_every_lift_at_two_sets():
+    result = app.deterministic_training_recommendation(
+        [{"id": "today", "date": date.today().isoformat(), "title": "Chest", "kind": "strength", "minutes": 60, "status": "planned", "locked": False, "workout": []}],
+        [{"calendar_date": date.today().isoformat(), "sleep_seconds": 5.6 * 3600, "hrv_ms": 60, "resting_hr": 52, "stress_avg": 30}],
+        None,
+    )
+    assert result["mode"] == "shorten"
+    assert result["score"] == 70
+    assert result["adjusted_sets"] == 2
+    assert result["adjusted_minutes"] == 36
+    assert result["headline"] == "You slept 5h 36m. Keep the lifts, cut each to 2 sets (about 36 min)."
+    lines = app.workout_lines({"workout": ["Dumbbell Bench Press — 3 × 8–12", "Cable Fly — 1 × 15", "Easy effort — conversational pace"]}, cap_sets=2)
+    assert [(line["name"], line["sets"], line["reps"]) for line in lines] == [("Dumbbell Bench Press", 2, "8–12"), ("Cable Fly", 1, "15"), ("Easy effort", None, None)]
+
+
 def test_deterministic_recommendation_prioritizes_recovery_when_signals_are_low():
     result = app.deterministic_training_recommendation(
         [{"id": "today", "date": date.today().isoformat(), "title": "Long Run", "kind": "run", "minutes": 70, "status": "planned", "locked": False}],

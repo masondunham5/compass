@@ -444,54 +444,72 @@ def deterministic_training_recommendation(
     baseline_rhr = mean_metric(baseline_rows, "resting_hr")
     score = 100
     reasons: list[str] = []
+    headlines: list[str] = []  # Short, plain-language version of each triggered rule for the Today banner.
     if current and current.get("sleep_seconds") is not None:
         sleep_hours = float(current["sleep_seconds"]) / 3600
+        slept = f"You slept {int(sleep_hours)}h {round((sleep_hours % 1) * 60):02d}m."
         if sleep_hours < 6:
-            score -= 30; reasons.append(f"Sleep was {sleep_hours:.1f}h (under the 6h recovery floor).")
+            score -= 30; reasons.append(f"Sleep was {sleep_hours:.1f}h (under the 6h recovery floor)."); headlines.append(slept)
         elif sleep_hours < 7:
-            score -= 12; reasons.append(f"Sleep was {sleep_hours:.1f}h (below the 7h target).")
+            score -= 12; reasons.append(f"Sleep was {sleep_hours:.1f}h (below the 7h target)."); headlines.append(slept)
     if current and baseline_hrv and current.get("hrv_ms") is not None and float(current["hrv_ms"]) <= baseline_hrv * 0.85:
-        score -= 20; reasons.append(f"HRV is {round((1 - float(current['hrv_ms']) / baseline_hrv) * 100)}% below your rolling baseline.")
+        drop = round((1 - float(current["hrv_ms"]) / baseline_hrv) * 100)
+        score -= 20; reasons.append(f"HRV is {drop}% below your rolling baseline."); headlines.append(f"HRV is {drop}% below baseline.")
     if current and baseline_rhr and current.get("resting_hr") is not None and float(current["resting_hr"]) >= baseline_rhr * 1.08:
-        score -= 15; reasons.append(f"Resting HR is {round((float(current['resting_hr']) / baseline_rhr - 1) * 100)}% above your rolling baseline.")
+        rise = round((float(current["resting_hr"]) / baseline_rhr - 1) * 100)
+        score -= 15; reasons.append(f"Resting HR is {rise}% above your rolling baseline."); headlines.append(f"Resting HR is {rise}% above baseline.")
     if current and current.get("stress_avg") is not None and float(current["stress_avg"]) >= 65:
-        score -= 10; reasons.append("Garmin stress average is elevated (65 or above).")
+        score -= 10; reasons.append("Garmin stress average is elevated (65 or above)."); headlines.append("Stress is running high.")
     if manual_health:
         if int(manual_health.get("soreness", 0)) >= 8:
-            score -= 30; reasons.append("Manual soreness is 8/10 or higher.")
+            score -= 30; reasons.append("Manual soreness is 8/10 or higher."); headlines.append("You logged high soreness.")
         elif int(manual_health.get("soreness", 0)) >= 6:
-            score -= 8; reasons.append("Manual soreness is 6/10 or higher.")
+            score -= 8; reasons.append("Manual soreness is 6/10 or higher."); headlines.append("You logged some soreness.")
         if int(manual_health.get("energy", 10)) <= 3:
-            score -= 25; reasons.append("Manual energy is 3/10 or lower.")
+            score -= 25; reasons.append("Manual energy is 3/10 or lower."); headlines.append("You logged low energy.")
         elif int(manual_health.get("energy", 10)) <= 5:
-            score -= 8; reasons.append("Manual energy is 5/10 or lower.")
+            score -= 8; reasons.append("Manual energy is 5/10 or lower."); headlines.append("You logged lowish energy.")
     score = max(0, score)
     planned = [session for session in sessions if session.get("status") == "planned"]
     planned.sort(key=lambda session: (0 if session.get("date") == today else 1, session.get("date", ""), session.get("title", "")))
     target = next((session for session in planned if session.get("locked")), None) or (planned[0] if planned else None)
-    target_name = target["title"] if target else "your next training block"
+    target_name = re.sub(r"^W\d+\s*·\s*", "", target["title"]) if target else "your next training block"
+    adjusted_sets: int | None = None
+    adjusted_minutes: int | None = None
     if score <= 50:
         title, mode = "Recovery-first day", "recovery"
         guidance = "Take 20–30 easy minutes of walking and mobility, or rest. Do not add catch-up volume today."
+        action = "Take an easy walk or mobility today, or rest."
     elif score <= 75:
         title, mode = "Use the short version", "shorten"
         if target and target.get("kind") == "run":
-            guidance = f"Keep {target_name} easy and cap it around {max(20, round(target.get('minutes', 30) * 0.6))} minutes. Skip intensity."
+            adjusted_minutes = max(20, round(target.get("minutes", 30) * 0.6))
+            guidance = f"Keep {target_name} easy and cap it around {adjusted_minutes} minutes. Skip intensity."
+            action = f"Keep the run easy and cap it around {adjusted_minutes} min."
         elif target:
-            guidance = f"Do the first 2–3 movements of {target_name} in about {max(25, round(target.get('minutes', 45) * 0.6))} minutes. Leave 2–3 reps in reserve."
+            # Keep every exercise for consistency; trim volume by capping each at two working sets.
+            adjusted_sets = 2
+            adjusted_minutes = max(25, round(target.get("minutes", 45) * 0.6))
+            guidance = f"Keep every lift in {target_name} but cap each at 2 working sets (about {adjusted_minutes} minutes). Leave 2–3 reps in reserve."
+            action = f"Keep the lifts, cut each to 2 sets (about {adjusted_minutes} min)."
         else:
             guidance = "Keep activity easy today and reassess after a check-in tomorrow."
+            action = "Keep activity easy today."
     elif target:
         title, mode = "Planned session is appropriate", "train"
         guidance = f"Do {target_name} as planned. Keep the opening working sets controlled and adjust load by effort."
+        action = "Train as planned."
     else:
         title, mode = "No session needs moving", "rest"
         guidance = "You have no planned session in the next week. A relaxed walk or mobility is enough today."
+        action = "No session planned. An easy walk is plenty."
     if not reasons:
         reasons.append("No recovery flag crossed a conservative threshold; recommendation is based on the planned session.")
     return {
         "engine": "deterministic-v1", "score": score, "mode": mode, "title": title, "guidance": guidance,
-        "target_session": {"id": target["id"], "title": target["title"], "locked": bool(target.get("locked"))} if target else None,
+        "headline": " ".join([*headlines[:1], action]),
+        "adjusted_sets": adjusted_sets, "adjusted_minutes": adjusted_minutes,
+        "target_session": {"id": target["id"], "title": target["title"], "date": target.get("date"), "kind": target.get("kind"), "minutes": target.get("minutes"), "locked": bool(target.get("locked"))} if target else None,
         "reasons": reasons,
         "signals": {"sleep_hours": round(float(current["sleep_seconds"]) / 3600, 1) if current and current.get("sleep_seconds") is not None else None, "hrv": current.get("hrv_ms") if current else None, "hrv_baseline": baseline_hrv, "resting_hr": current.get("resting_hr") if current else None, "resting_hr_baseline": baseline_rhr, "manual_energy": manual_health.get("energy") if manual_health else None, "manual_soreness": manual_health.get("soreness") if manual_health else None},
     }
@@ -722,6 +740,7 @@ def garmin_dashboard(days: int = 7) -> dict[str, Any]:
                ORDER BY activity_date DESC""",
             ((date.today() - timedelta(days=27)).isoformat(),),
         ).fetchall()
+        history_days = db.execute("SELECT COUNT(*) FROM garmin_daily_metrics").fetchone()[0]
     records = [dict(row) for row in rows]
     latest = records[0] if records else None
     average = lambda key: round(sum(row[key] or 0 for row in records if row[key] is not None) / max(1, sum(row[key] is not None for row in records)), 1)
@@ -745,6 +764,7 @@ def garmin_dashboard(days: int = 7) -> dict[str, Any]:
     return {
         "status": garmin_status(),
         "days": days,
+        "history_days": history_days,
         "latest": latest,
         "records": records,
         "average_sleep_hours": round(average("sleep_seconds") / 3600, 1) if any(row["sleep_seconds"] for row in records) else None,
@@ -788,6 +808,91 @@ def training_recommendation() -> dict[str, Any]:
     return deterministic_training_recommendation(
         [row_to_session(row) for row in session_rows], [dict(row) for row in metric_rows], dict(manual) if manual else None
     )
+
+
+def workout_lines(session: dict[str, Any], cap_sets: int | None = None) -> list[dict[str, Any]]:
+    """Split 'Exercise — 3 × 8–12' lines into display rows, optionally capping sets."""
+    rows = []
+    for line in session.get("workout", []):
+        name, _, prescription = line.partition("—")
+        match = re.search(r"(\d+)\s*[×x]\s*(\d+(?:\s*[–-]\s*\d+)?)", prescription)
+        sets = int(match.group(1)) if match else None
+        reps = re.sub(r"\s+", "", match.group(2)).replace("-", "–") if match else None
+        shown_sets = min(sets, cap_sets) if sets and cap_sets else sets
+        rows.append({"name": name.strip(), "sets": shown_sets, "planned_sets": sets, "reps": reps, "note": None if match else prescription.strip() or None})
+    return rows
+
+
+def plan_position(today: date) -> dict[str, Any] | None:
+    with connection() as db:
+        row = db.execute("SELECT name, plan_json FROM plans WHERE status = 'active' ORDER BY created_at DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    plan = json.loads(row["plan_json"])
+    weeks = plan.get("config", {}).get("weeks") or len(plan.get("phases", []))
+    try:
+        week = (today - date.fromisoformat(plan["start_date"])).days // 7 + 1
+    except (KeyError, ValueError):
+        return None
+    phase = next((item for item in plan.get("phases", []) if item.get("week") == week), None)
+    return {"name": row["name"], "week": week, "weeks": weeks, "phase": phase.get("name") if phase else None, "phase_message": phase.get("message") if phase else None, "in_block": 1 <= week <= weeks}
+
+
+@app.get("/api/today")
+def today_view() -> dict[str, Any]:
+    """Everything the Today screen needs in one call. Read-only."""
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    with connection() as db:
+        week_rows = db.execute(
+            "SELECT * FROM sessions WHERE session_date BETWEEN ? AND ? ORDER BY session_date, title",
+            (monday.isoformat(), (monday + timedelta(days=6)).isoformat()),
+        ).fetchall()
+        activity_rows = db.execute(
+            "SELECT activity_date, activity_type, title, distance_miles, duration_minutes FROM imported_activities WHERE activity_date BETWEEN ? AND ?",
+            (monday.isoformat(), (monday + timedelta(days=6)).isoformat()),
+        ).fetchall()
+        next_row = db.execute(
+            "SELECT * FROM sessions WHERE session_date > ? AND status = 'planned' ORDER BY session_date, title LIMIT 1", (today.isoformat(),)
+        ).fetchone()
+        recovery_row = db.execute(
+            "SELECT * FROM garmin_daily_metrics WHERE sleep_seconds IS NOT NULL OR hrv_ms IS NOT NULL ORDER BY calendar_date DESC LIMIT 1"
+        ).fetchone()
+        manual = db.execute("SELECT * FROM daily_health WHERE checkin_date = ?", (today.isoformat(),)).fetchone()
+    week_sessions = [row_to_session(row) for row in week_rows]
+    activities = [dict(row) for row in activity_rows]
+    days = []
+    for offset in range(7):
+        day = (monday + timedelta(days=offset)).isoformat()
+        sessions = [s for s in week_sessions if s["date"] == day and s["status"] != "cancelled"]
+        day_activities = [a for a in activities if a["activity_date"] == day]
+        trained = any(s["status"] == "completed" for s in sessions) or bool(day_activities)
+        days.append({
+            "date": day,
+            "state": "done" if trained else ("planned" if sessions else "rest"),
+            "sessions": [{**s, "lines": workout_lines(s)} for s in sessions],
+            "activities": day_activities,
+        })
+    recommendation = training_recommendation()
+    target = recommendation.get("target_session")
+    today_sessions = [s for s in week_sessions if s["date"] == today.isoformat() and s["status"] != "cancelled"]
+    focus = next((s for s in today_sessions if target and s["id"] == target["id"]), None) or (today_sessions[0] if today_sessions else None)
+    focus_payload = None
+    if focus:
+        cap = recommendation.get("adjusted_sets") if focus["kind"] == "strength" and target and focus["id"] == target["id"] else None
+        focus_payload = {**focus, "lines": workout_lines(focus, cap), "full_lines": workout_lines(focus), "adjusted_sets": cap,
+                         "adjusted_minutes": recommendation.get("adjusted_minutes") if target and focus["id"] == target["id"] else None}
+    return {
+        "today": today.isoformat(),
+        "plan": plan_position(today),
+        "week": days,
+        "focus": focus_payload,
+        "other_today": [{**s, "lines": workout_lines(s)} for s in today_sessions if not focus or s["id"] != focus["id"]],
+        "recommendation": recommendation,
+        "recovery": dict(recovery_row) if recovery_row else None,
+        "checked_in_today": manual is not None,
+        "up_next": row_to_session(next_row) if next_row else None,
+    }
 
 
 @app.post("/api/garmin/sync")
@@ -847,7 +952,8 @@ def save_daily_health(checkin: DailyHealth) -> dict[str, Any]:
 def activities() -> dict[str, Any]:
     with connection() as db:
         rows = db.execute("SELECT * FROM imported_activities ORDER BY activity_date DESC, imported_at DESC LIMIT 60").fetchall()
-    return {"activities": [{**dict(row), "details": json.loads(row["details_json"])} for row in rows]}
+    # raw_json (full Garmin payload) stays server-side; the list view does not need it.
+    return {"activities": [{**{k: row[k] for k in row.keys() if k != "raw_json"}, "details": json.loads(row["details_json"])} for row in rows]}
 
 
 @app.post("/api/activities/import")
