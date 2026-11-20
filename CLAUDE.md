@@ -22,6 +22,9 @@ The virtualenv lives one level up, at `..\.venv` (the launchers check `.venv` fi
 # Re-derive metric columns from stored raw responses (no API calls), e.g. after editing METRIC_FIELDS
 ..\.venv\Scripts\python.exe garmin_sync.py --rebuild
 
+# Import past lifting sets from CSV (date,workout,exercise,set,weight_lbs,reps,rpe,notes); re-runnable, use --dry-run first
+..\.venv\Scripts\python.exe scripts\import_lifting_history.py path\to\lifting_history.csv --dry-run
+
 # Demo data (refuses to overwrite an existing DB) / DB backup into backups/
 ..\.venv\Scripts\python.exe scripts\load_demo_data.py
 ..\.venv\Scripts\python.exe scripts\backup_database.py

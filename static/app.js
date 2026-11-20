@@ -407,7 +407,8 @@ function renderTrain() {
             g?.duration_minutes ? `${Math.round(g.duration_minutes)} min` : null,
             g?.average_hr ? `${Math.round(g.average_hr)} bpm avg` : null,
           ].filter(Boolean);
-          const source = s.sets_logged && g ? "Logged here + Garmin" : g ? "Garmin" : "Logged here";
+          const where = String(s.description || "").startsWith("Imported from lifting history") ? "Imported" : "Logged here";
+          const source = s.sets_logged && g ? `${where} + Garmin` : g ? "Garmin" : where;
           return `<button type="button" class="row-item" data-review="${esc(s.id)}"><div class="date-chip"><span>${esc(fmtDow(s.date))}</span><b>${asDate(s.date).getDate()}</b></div><div class="grow"><b>${esc(cleanTitle(s.title))}</b><small>${source}${bits.length ? ` · ${esc(bits.join(" · "))}` : ""}</small></div>${icon("chevron")}</button>`;
         }
         const a = item.activity;
@@ -538,9 +539,20 @@ function renderProgress() {
 
 function openExerciseSheet(exercise) {
   const sheet = $("#exercise-sheet");
-  const history = exercise.history.slice(-16);
-  const max = Math.max(...history.map(point => point.e1rm), 1);
-  $("#exercise-sheet-body").innerHTML = `<button class="sheet-close" type="button" aria-label="Close">${icon("close")}</button><p class="kicker">Estimated 1RM</p><h2>${esc(exercise.name)}</h2><p class="muted">Best ${exercise.best_set.e1rm.toFixed(1)} lb from ${exercise.best_set.weight} lb × ${exercise.best_set.reps}</p><div class="detail-chart">${history.map(point => `<i title="${esc(point.date)}: ${point.e1rm.toFixed(1)} lb" style="height:${Math.max(8, (point.e1rm / max) * 100)}%"></i>`).join("")}</div><div class="table"><div><span>Date</span><span>Set</span><span>e1RM</span><span>RPE</span></div>${history.slice().reverse().map(point => `<div><span>${esc(fmtShort(point.date))}</span><span>${point.weight} × ${point.reps}</span><span>${point.e1rm.toFixed(1)}</span><span>${point.rpe ?? "—"}</span></div>`).join("")}</div>`;
+  // One point per workout: the best set (highest estimated 1RM) that day.
+  const byDay = new Map();
+  exercise.history.forEach(point => {
+    const day = byDay.get(point.date) || { date: point.date, best: point, sets: 0 };
+    day.sets += 1;
+    if (point.e1rm > day.best.e1rm) day.best = point;
+    byDay.set(point.date, day);
+  });
+  const days = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-40);
+  const values = days.map(day => day.best.e1rm);
+  const low = Math.min(...values) * 0.92; const high = Math.max(...values, low + 1);
+  const first = days[0]; const last = days[days.length - 1];
+  const change = days.length > 1 ? last.best.e1rm - first.best.e1rm : 0;
+  $("#exercise-sheet-body").innerHTML = `<button class="sheet-close" type="button" aria-label="Close">${icon("close")}</button><p class="kicker">Estimated 1RM · best set per workout</p><h2>${esc(exercise.name)}</h2><p class="muted">Best ${exercise.best_set.e1rm.toFixed(1)} lb from ${exercise.best_set.weight} lb × ${exercise.best_set.reps}${days.length > 1 ? ` · ${change >= 0 ? "+" : ""}${change.toFixed(0)} lb since ${esc(fmtShort(first.date))}` : ""}</p><div class="detail-chart">${days.map(day => `<i title="${esc(fmtShort(day.date))}: ${day.best.weight} × ${day.best.reps} (${day.best.e1rm.toFixed(1)} lb)" style="height:${Math.max(6, ((day.best.e1rm - low) / (high - low)) * 100)}%"></i>`).join("")}</div><div class="table"><div><span>Date</span><span>Best set</span><span>e1RM</span><span>Sets</span></div>${days.slice().reverse().map(day => `<div><span>${esc(fmtShort(day.date))}</span><span>${day.best.weight} × ${day.best.reps}</span><span>${day.best.e1rm.toFixed(1)}</span><span>${day.sets}</span></div>`).join("")}</div>`;
   sheet.querySelector(".sheet-close").onclick = () => sheet.close();
   openDialog(sheet);
 }

@@ -138,6 +138,44 @@ def test_garmin_activities_match_same_day_sessions_once():
         assert app.match_garmin_activities(db) == 0  # idempotent
 
 
+def test_lifting_history_import_merges_by_date_and_is_rerunnable(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import import_lifting_history as importer
+
+    csv_file = tmp_path / "history.csv"
+    csv_file.write_text(
+        "date,workout,exercise,set,weight_lbs,reps,rpe,notes\n"
+        "2026-01-05,Push,Barbell Bench Press,1,225,5,,date approximate\n"
+        "2026-01-05,Chest Tri Shoulder,Barbell Bench Press,2,225,4,,date approximate\n"
+        "2026-01-05,Chest Tri Shoulder,Rope Pushdown,1,50,10,,\n"
+        "2026-01-07,Back Bi,Lat Pulldown,1,170,8,,deload; date approximate\n",
+        encoding="utf-8",
+    )
+    app.initialize()
+    with app.connection() as db:
+        garmin_sync.ensure_schema(db)
+        db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, workout_json) VALUES ('plan-1', '2026-01-05', 'strength', 'W1 · Back & Biceps', 60, 'planned', '[]')")
+        db.execute("INSERT INTO imported_activities (id, source, activity_date, activity_type, title, duration_minutes, imported_at) VALUES ('g7', 'Garmin API', '2026-01-07', 'Strength Training', 'Strength', 41, 't')")
+
+    workouts = importer.read_workouts(csv_file)
+    assert [(w["date"], w["title"], w["set_count"]) for w in workouts] == [("2026-01-05", "Chest Tri Shoulder", 3), ("2026-01-07", "Back Bi", 1)]
+    for _ in range(2):  # second run must not duplicate anything
+        importer.import_workouts(workouts)
+
+    with app.connection() as db:
+        sessions = {row["id"]: dict(row) for row in db.execute("SELECT * FROM sessions")}
+        assert set(sessions) == {"plan-1", "history-2026-01-07"}
+        assert sessions["plan-1"]["title"] == "Chest Tri Shoulder" and sessions["plan-1"]["status"] == "completed"
+        assert "planned: W1 · Back & Biceps" in sessions["plan-1"]["description"]
+        assert sessions["history-2026-01-07"]["minutes"] == 41  # Garmin duration
+        assert db.execute("SELECT COUNT(*) FROM set_logs").fetchone()[0] == 4
+        assert db.execute("SELECT note FROM set_logs WHERE session_id = 'history-2026-01-07'").fetchone()[0] == "deload"
+        assert db.execute("SELECT linked_session_id FROM imported_activities WHERE id = 'g7'").fetchone()[0] == "history-2026-01-07"
+        assert db.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 2
+    bench = next(item for item in app.progress()["exercises"] if item["name"] == "Barbell Bench Press")
+    assert bench["best_set"]["weight"] == 225 and len(bench["history"]) == 2
+
+
 def test_daily_metric_extracts_extended_fields():
     payloads = {
         "summary": {"totalSteps": 8123, "floorsAscended": 12.0, "moderateIntensityMinutes": 20, "vigorousIntensityMinutes": 15, "avgWakingRespirationValue": 14.0},
