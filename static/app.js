@@ -548,7 +548,26 @@ async function openSession(sessionId, options = {}) {
 
 /* ---------------------------------------------------------------- On-the-fly editing */
 
-const refreshWorkout = () => openSession(state.workout.id, state.workout.options);
+// Re-render after an edit without losing your place or values typed into sets you haven't logged yet.
+async function refreshWorkout() {
+  const drafts = {};
+  $$("#workout .exercise").forEach(card => {
+    const name = card.querySelector("h3")?.textContent;
+    card.querySelectorAll(".set-row").forEach(row => {
+      if (!row.querySelector(".set-check.logged")) drafts[`${name}|${row.dataset.setNumber}`] = [...row.querySelectorAll("input")].map(input => input.value);
+    });
+  });
+  const scroll = window.scrollY;
+  await openSession(state.workout.id, state.workout.options);
+  $$("#workout .exercise").forEach(card => {
+    const name = card.querySelector("h3")?.textContent;
+    card.querySelectorAll(".set-row").forEach(row => {
+      const saved = drafts[`${name}|${row.dataset.setNumber}`];
+      if (saved && !row.querySelector(".set-check.logged")) row.querySelectorAll("input").forEach((input, index) => { input.value = saved[index]; });
+    });
+  });
+  window.scrollTo({ top: scroll });
+}
 
 async function exerciseTool(tool, exercise) {
   const sid = encodeURIComponent(state.workout.id);
