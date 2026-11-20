@@ -337,6 +337,11 @@ async function runGarminSync(mode) {
     const result = await api(mode === "backfill" ? "/api/garmin/backfill" : "/api/garmin/sync", { method: "POST" });
     message.textContent = result.status === "partial" ? result.message : `Done: ${result.metrics_updated} days and ${result.activities_imported} activities updated.`;
     await load();
+    // The sync can succeed while Garmin itself has nothing for today yet (watch not uploaded).
+    const todayRow = (state.dashboard?.records || []).find(record => record.calendar_date === state.today.today);
+    if (result.status !== "partial" && num(todayRow?.sleep_seconds) === null) {
+      message.textContent += " Garmin hasn't received last night's sleep yet. Sync your watch in the Garmin Connect app, then sync here again.";
+    }
   } catch (error) {
     message.textContent = error.message; message.classList.add("error");
     button.disabled = false; button.textContent = mode === "backfill" ? "Backfill 30 days" : "Sync now";
