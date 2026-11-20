@@ -393,14 +393,22 @@ function renderTrain() {
 
   // History: Health Hub logs + Garmin activities
   const logged = (state.history?.sessions || []).map(session => ({ date: session.date, kind: "session", session }));
-  const garmin = (state.activities?.activities || []).map(activity => ({ date: activity.activity_date, kind: "activity", activity }));
+  // Garmin activities matched to a session are shown on that session's row, not twice.
+  const garmin = (state.activities?.activities || []).filter(activity => !activity.linked_session_id).map(activity => ({ date: activity.activity_date, kind: "activity", activity }));
   const items = [...logged, ...garmin].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 60);
   $("#train-history").innerHTML = items.length
     ? `<article class="card list-card">${items.map(item => {
         if (item.kind === "session") {
           const s = item.session;
-          const detail = s.metrics?.distance_miles ? `${s.metrics.distance_miles} mi · ${formatPace(s.metrics.pace_seconds_per_mile)}` : `${s.sets_logged} sets logged`;
-          return `<button type="button" class="row-item" data-review="${esc(s.id)}"><div class="date-chip"><span>${esc(fmtDow(s.date))}</span><b>${asDate(s.date).getDate()}</b></div><div class="grow"><b>${esc(cleanTitle(s.title))}</b><small>Logged here · ${esc(detail)}</small></div>${icon("chevron")}</button>`;
+          const g = s.garmin?.[0];
+          const bits = [
+            s.sets_logged ? `${s.sets_logged} sets logged` : null,
+            s.metrics?.distance_miles ? `${s.metrics.distance_miles} mi · ${formatPace(s.metrics.pace_seconds_per_mile)}` : null,
+            g?.duration_minutes ? `${Math.round(g.duration_minutes)} min` : null,
+            g?.average_hr ? `${Math.round(g.average_hr)} bpm avg` : null,
+          ].filter(Boolean);
+          const source = s.sets_logged && g ? "Logged here + Garmin" : g ? "Garmin" : "Logged here";
+          return `<button type="button" class="row-item" data-review="${esc(s.id)}"><div class="date-chip"><span>${esc(fmtDow(s.date))}</span><b>${asDate(s.date).getDate()}</b></div><div class="grow"><b>${esc(cleanTitle(s.title))}</b><small>${source}${bits.length ? ` · ${esc(bits.join(" · "))}` : ""}</small></div>${icon("chevron")}</button>`;
         }
         const a = item.activity;
         const bits = [a.activity_type, a.distance_miles ? `${a.distance_miles} mi` : null, a.duration_minutes ? `${Math.round(a.duration_minutes)} min` : null, a.average_hr ? `${Math.round(a.average_hr)} bpm avg` : null].filter(Boolean).join(" · ");

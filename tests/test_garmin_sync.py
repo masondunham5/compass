@@ -111,6 +111,33 @@ def test_null_from_failed_endpoint_does_not_erase_existing_value(temp_database):
         assert db.execute("SELECT steps FROM garmin_daily_metrics WHERE calendar_date = ?", (day,)).fetchone()[0] == 9000
 
 
+def test_garmin_activities_match_same_day_sessions_once():
+    app.initialize()
+    with app.connection() as db:
+        garmin_sync.ensure_schema(db)
+        sessions = [
+            ("s-lift", "2026-01-05", "strength", "planned"),
+            ("s-run", "2026-01-05", "run", "planned"),
+            ("s-done", "2026-01-06", "strength", "completed"),
+        ]
+        for sid, day, kind, status in sessions:
+            db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status) VALUES (?, ?, ?, ?, 60, ?)", (sid, day, kind, f"W1 · {kind}", status))
+        activities = [
+            ("g1", "2026-01-05", "Strength Training", None), ("g2", "2026-01-05", "Treadmill Running", 3.0),
+            ("g3", "2026-01-06", "Strength Training", None), ("g4", "2026-01-07", "Strength Training", None), ("g5", "2026-01-05", "Yoga", None),
+        ]
+        for aid, day, kind, miles in activities:
+            db.execute("INSERT INTO imported_activities (id, source, activity_date, activity_type, title, distance_miles, duration_minutes, average_hr, imported_at) VALUES (?, 'Garmin API', ?, ?, ?, ?, 30, 120, 't')", (aid, day, kind, kind, miles))
+        assert app.match_garmin_activities(db) == 3
+        links = dict(db.execute("SELECT id, linked_session_id FROM imported_activities").fetchall())
+        assert links == {"g1": "s-lift", "g2": "s-run", "g3": "s-done", "g4": None, "g5": None}
+        statuses = dict(db.execute("SELECT id, status FROM sessions").fetchall())
+        assert statuses == {"s-lift": "completed", "s-run": "completed", "s-done": "completed"}
+        # The already-completed session is only linked; no extra completion log is written.
+        assert db.execute("SELECT COUNT(*) FROM logs WHERE session_id = 's-done'").fetchone()[0] == 0
+        assert app.match_garmin_activities(db) == 0  # idempotent
+
+
 def test_daily_metric_extracts_extended_fields():
     payloads = {
         "summary": {"totalSteps": 8123, "floorsAscended": 12.0, "moderateIntensityMinutes": 20, "vigorousIntensityMinutes": 15, "avgWakingRespirationValue": 14.0},

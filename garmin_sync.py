@@ -30,7 +30,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app import activity_id, connection, initialize, normalize_activity
+from app import activity_id, connection, initialize, match_garmin_activities, normalize_activity
 
 
 BASE_URL = "https://personal.connectapi.garmin.com"
@@ -317,7 +317,12 @@ METRIC_FIELDS: list[Field] = [
     ("hrv_baseline_low", "REAL", "hrv", ("balancedLow",), _number),
     ("hrv_baseline_high", "REAL", "hrv", ("balancedUpper",), _number),
     ("hrv_feedback", "TEXT", "hrv", ("feedbackPhrase",), _text),
+    # VO2 max comes from a separate range endpoint (see sync_vo2_max); only days Garmin updated it have a value.
+    ("vo2_max", "REAL", "vo2max", ("vo2MaxPreciseValue", "vo2MaxValue"), _number),
 ]
+
+VO2_MAX_PATH = "/metrics-service/metrics/maxmet/daily/{start}/{end}"
+VO2_MAX_LOOKBACK_DAYS = 30
 
 ORIGINAL_COLUMNS = {"steps", "active_calories", "total_calories", "resting_hr", "hrv_ms", "sleep_seconds", "stress_avg", "body_battery"}
 
@@ -374,6 +379,35 @@ def save_day(db: sqlite3.Connection, record: dict[str, Any], payloads: dict[str,
             ON CONFLICT(calendar_date) DO UPDATE SET {updates}, source_json=excluded.source_json, synced_at=excluded.synced_at""",
         (record["calendar_date"], *(record[c] for c in columns), record["source_json"], synced_at),
     )
+
+
+def sync_vo2_max(token: str, end: date) -> int:
+    """One request for the last 30 days of VO2 max; stores raw per day and fills vo2_max."""
+    start = end - timedelta(days=VO2_MAX_LOOKBACK_DAYS - 1)
+    try:
+        payload = garmin_get(VO2_MAX_PATH.format(start=start.isoformat(), end=end.isoformat()), token)
+    except GarminEndpointError:
+        return 0
+    updated = 0
+    now = _now()
+    with connection() as db:
+        for item in payload if isinstance(payload, list) else []:
+            day = _find(item, "generic.calendarDate", "calendarDate")
+            value = _number(_find(item, "vo2MaxPreciseValue", "vo2MaxValue"))
+            if not day or value is None:
+                continue
+            db.execute(
+                """INSERT INTO garmin_raw_responses (calendar_date, endpoint, payload_json, fetched_at) VALUES (?, 'vo2max', ?, ?)
+                   ON CONFLICT(calendar_date, endpoint) DO UPDATE SET payload_json=excluded.payload_json, fetched_at=excluded.fetched_at""",
+                (day, json.dumps(item), now),
+            )
+            db.execute(
+                """INSERT INTO garmin_daily_metrics (calendar_date, vo2_max, source_json, synced_at) VALUES (?, ?, '{}', ?)
+                   ON CONFLICT(calendar_date) DO UPDATE SET vo2_max=excluded.vo2_max""",
+                (day, value, now),
+            )
+            updated += 1
+    return updated
 
 
 # --------------------------------------------------------------------------- #
@@ -477,7 +511,9 @@ def run_sync(days: int = 2, progress: Callable[[str], None] | None = None) -> di
         activities = activities_payload.get("activities", []) if isinstance(activities_payload, dict) else (activities_payload or [])
         with connection() as db:
             imported = save_activities(db, activities, started)
-        report(f"Activities: {imported} saved.")
+            matched = match_garmin_activities(db)
+        report(f"Activities: {imported} saved, {matched} matched to planned sessions.")
+        report(f"VO2 max: {sync_vo2_max(token, end)} days.")
         update_log("running", "", imported, saved, finished=False)
 
         for offset in range(days):
@@ -494,7 +530,7 @@ def run_sync(days: int = 2, progress: Callable[[str], None] | None = None) -> di
                 save_day(db, record, payloads, _now())
             saved += 1
             update_log("running", "", imported, saved, finished=False)
-            report(f"{current}: saved ({len(payloads)}/{len(DAILY_ENDPOINTS)} endpoints).")
+            report(f"{current}: saved ({sum(name in payloads for name in DAILY_ENDPOINTS)}/{len(DAILY_ENDPOINTS)} endpoints).")
     except GarminFatalError as error:
         if saved == 0 and imported == 0:
             update_log("error", str(error), imported, saved, finished=True)

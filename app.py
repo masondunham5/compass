@@ -760,7 +760,11 @@ def garmin_dashboard(days: int = 7) -> dict[str, Any]:
         value = details.get("vo2_max") if isinstance(details, dict) else None
         if isinstance(value, (int, float)) and value > 0:
             vo2_values.append((row["activity_date"], float(value)))
-    vo2_latest = vo2_values[0] if vo2_values else None
+    # Garmin publishes VO2 max through its metrics service (stored per day by the sync);
+    # the per-activity value is only a fallback for older databases.
+    with connection() as db:
+        vo2_row = db.execute("SELECT calendar_date, vo2_max FROM garmin_daily_metrics WHERE vo2_max IS NOT NULL ORDER BY calendar_date DESC LIMIT 1").fetchone() if "vo2_max" in {r[1] for r in db.execute("PRAGMA table_info(garmin_daily_metrics)")} else None
+    vo2_latest = (vo2_row["calendar_date"], float(vo2_row["vo2_max"])) if vo2_row else (vo2_values[0] if vo2_values else None)
     return {
         "status": garmin_status(),
         "days": days,
@@ -983,6 +987,60 @@ async def import_activity_file(file: UploadFile = File(...)) -> dict[str, Any]:
             if cursor.rowcount:
                 saved.append(activity)
     return {"imported": len(saved), "activities": saved}
+
+
+def garmin_activity_kind(activity_type: str) -> str | None:
+    lowered = (activity_type or "").lower()
+    if "run" in lowered:
+        return "run"
+    if "strength" in lowered:
+        return "strength"
+    return None
+
+
+def match_garmin_activities(db: sqlite3.Connection) -> int:
+    """Pair each unlinked Garmin activity with the same-day session of the same kind.
+
+    A still-planned session is marked completed using Garmin's duration/HR, so a
+    workout recorded on the watch and planned here appears once, not twice. A
+    session already completed in Health Hub is only linked. Activities with no
+    same-day, same-kind session stay as standalone history.
+    """
+    today = date.today().isoformat()
+    rows = db.execute(
+        "SELECT * FROM imported_activities WHERE linked_session_id IS NULL AND source = 'Garmin API' AND activity_date <= ? ORDER BY activity_date, imported_at",
+        (today,),
+    ).fetchall()
+    matched = 0
+    for activity in rows:
+        kind = garmin_activity_kind(activity["activity_type"])
+        if not kind:
+            continue
+        session = db.execute(
+            """SELECT * FROM sessions WHERE session_date = ? AND kind = ? AND status IN ('planned', 'completed')
+               ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, title LIMIT 1""",
+            (activity["activity_date"], kind),
+        ).fetchone()
+        if not session:
+            continue
+        if session["status"] == "planned":
+            metrics: dict[str, Any] = {
+                "source": "Garmin (matched automatically)", "garmin_activity_id": activity["id"],
+                "duration_minutes": activity["duration_minutes"], "average_hr": activity["average_hr"], "max_hr": activity["max_hr"],
+            }
+            if kind == "run" and activity["distance_miles"]:
+                metrics["distance_miles"] = activity["distance_miles"]
+                if activity["duration_minutes"]:
+                    metrics["pace_seconds_per_mile"] = round(activity["duration_minutes"] * 60 / activity["distance_miles"])
+            db.execute("UPDATE sessions SET status = 'completed' WHERE id = ?", (session["id"],))
+            db.execute(
+                "INSERT INTO logs (session_id, completed_at, minutes, notes, metrics_json) VALUES (?, ?, ?, ?, ?)",
+                (session["id"], datetime.now().astimezone().isoformat(timespec="seconds"), round(activity["duration_minutes"] or session["minutes"]),
+                 "Completed from a Garmin activity on the same day.", json.dumps(metrics)),
+            )
+        db.execute("UPDATE imported_activities SET linked_session_id = ? WHERE id = ?", (session["id"], activity["id"]))
+        matched += 1
+    return matched
 
 
 @app.post("/api/activities/{activity_id}/link")
@@ -1214,6 +1272,12 @@ def workout_history() -> dict[str, Any]:
         ).fetchall()
         log_rows = db.execute("SELECT session_id, COUNT(*) AS sets_logged FROM set_logs GROUP BY session_id").fetchall()
         completion_rows = db.execute("SELECT session_id, metrics_json FROM logs ORDER BY id DESC").fetchall()
+        garmin_rows = db.execute(
+            "SELECT linked_session_id, title, activity_type, duration_minutes, average_hr, distance_miles FROM imported_activities WHERE linked_session_id IS NOT NULL"
+        ).fetchall()
+    garmin_by_session: dict[str, list[dict[str, Any]]] = {}
+    for row in garmin_rows:
+        garmin_by_session.setdefault(row["linked_session_id"], []).append({k: row[k] for k in row.keys() if k != "linked_session_id"})
     set_counts = {row["session_id"]: row["sets_logged"] for row in log_rows}
     metrics_by_session: dict[str, dict[str, Any]] = {}
     for row in completion_rows:
@@ -1223,6 +1287,7 @@ def workout_history() -> dict[str, Any]:
         session = row_to_session(row)
         session["sets_logged"] = set_counts.get(session["id"], 0)
         session["metrics"] = metrics_by_session.get(session["id"], {})
+        session["garmin"] = garmin_by_session.get(session["id"], [])
         sessions.append(session)
     return {"sessions": sessions}
 
