@@ -1,16 +1,20 @@
-"""Private, phone-first health hub that runs locally or on a home server."""
+"""Health Hub web app: FastAPI routes and request models.
+
+Logic lives in focused modules — core (database, settings, backups), exercises
+(workout lines, progression), planning (training blocks), readiness (rules engine),
+activities (file imports, Garmin matching), catalog, and race_plan. Names are
+re-exported here so scripts and tests can keep using `app.<name>`.
+"""
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
 import sqlite3
-import csv
-import hashlib
-import io
-import math
 import xml.etree.ElementTree as ET
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,31 +25,31 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
-DATABASE = DATA_DIR / "lifting_hub.db"
-LEGACY_FILE = Path(os.getenv("LOCALAPPDATA", ".")) / "Training Planner" / "planner.json"
-STATIC = ROOT / "static"
+import core
+from activities import (  # noqa: F401  (re-exported)
+    activity_id, garmin_activity_kind, match_garmin_activities, normalize_activity, parse_garmin_csv, parse_xml_activity,
+)
+from core import STATIC, auto_backup, connection, current_bodyweight, get_setting, initialize, monday_on_or_after, row_to_session  # noqa: F401
+from exercises import (  # noqa: F401
+    canonical_exercise, canonical_workout_line, estimate_1rm, exercise_name_from_session, exercises_for, format_workout_line,
+    is_bodyweight, line_target_weight, normalize_exercise, prescription_details, progression_suggestion, workout_lines,
+)
+from planning import (  # noqa: F401
+    ROUTINE_BY_DAYS, ROUTINE_DAYS, BlockDraftRequest, apply_exercise_aliases, build_draft, logged_routine_workouts, phase_lines,
+    retemplate_future_strength,
+)
+from readiness import CheckIn, deterministic_training_recommendation, health_recommendation, recommendation  # noqa: F401
 
 
-def load_local_env() -> None:
-    """Load simple KEY=value pairs from a local .env without adding a dependency.
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    initialize()
+    try:
+        auto_backup()
+    except (OSError, sqlite3.Error):
+        pass  # a failed backup must never stop the app from starting
+    yield
 
-    The file is intentionally ignored by Git and values already provided by Windows
-    or Task Scheduler always win.
-    """
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        return
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-load_local_env()
 
 app = FastAPI(
     title="Health Hub",
@@ -53,14 +57,9 @@ app = FastAPI(
     version="1.0.0",
     docs_url=None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
-
-class CheckIn(BaseModel):
-    available_minutes: int = Field(ge=0, le=360)
-    readiness: int = Field(ge=1, le=10)
-    soreness: int = Field(ge=1, le=10)
-    location: str = "Full gym"
 
 
 class Completion(BaseModel):
@@ -120,18 +119,6 @@ class ExerciseUpdate(BaseModel):
     clear_weight: bool = False
 
 
-class BlockDraftRequest(BaseModel):
-    name: str = Field(default="My next training block", min_length=2, max_length=80)
-    weeks: int = Field(default=10, ge=4, le=24)
-    goals: list[str] = Field(default_factory=lambda: ["Build strength", "Build muscle", "Improve endurance"])
-    lifting_days: int = Field(default=5, ge=2, le=6)
-    run_days: int = Field(default=3, ge=0, le=5)
-    starting_miles: float = Field(default=6, ge=0, le=50)
-    available_minutes: int = Field(default=60, ge=20, le=180)
-    equipment: str = "Full gym"
-    avoid: str = "Bulgarian split squats"
-    split: str = "logged-routine"
-    include_mobility: bool = False
 
 
 class DailyHealth(BaseModel):
@@ -145,832 +132,101 @@ class DailyHealth(BaseModel):
     notes: str = Field(default="", max_length=1000)
 
 
-def monday_on_or_after(day: date) -> date:
-    return day + timedelta(days=(7 - day.weekday()) % 7)
-
-
-def phase_for(week: int, weeks: int) -> tuple[str, str]:
-    if week == 1:
-        return "Re-entry", "Rebuild rhythm and leave a few reps in reserve."
-    if week in {max(2, weeks // 2), weeks}:
-        return "Deload", "Reduce volume and preserve technique, not momentum."
-    if week <= max(2, weeks // 2 - 1):
-        return "Foundation", "Build consistent volume with controlled effort."
-    return "Build", "Progress working sets when form and effort support it."
-
-
-# Built from the lifting log (Jun–Nov 2026): chest/triceps/shoulders twice a week,
-# back/biceps once or twice, legs about once, using the exercises actually logged.
-ROUTINE_DAYS: dict[str, list[str]] = {
-    "Chest, Triceps & Shoulders": ["Barbell Bench Press — 3 × 4–6", "Incline Dumbbell Press — 3 × 6–8", "Seated Dumbbell Shoulder Press — 2 × 8–10", "Pec Dec Fly — 3 × 8–10", "Rope Pushdown — 3 × 8–12"],
-    "Back & Biceps": ["Lat Pulldown — 3 × 6–10", "Seated Row — 3 × 8–10", "Face Pull — 2 × 10–12", "Hammer Curl — 2 × 6–10", "Reverse Dumbbell Curl — 2 × 8–12"],
-    "Chest, Triceps & Shoulders · Volume": ["Barbell Bench Press — 3 × 6–8", "Incline Dumbbell Press — 3 × 6–8", "Cable Fly — 2 × 10–12", "Low To High Cable Fly — 2 × 10–12", "Rope Pushdown — 2 × 8–10", "Tricep Extension — 2 × 8–12", "Cable Lateral Raise — 2 × 10–12"],
-    "Back & Biceps · Volume": ["Lat Pulldown — 3 × 8–10", "Seated Row — 3 × 8–10", "Face Pull — 2 × 10–12", "Dumbbell Curl — 2 × 8–10", "Reverse Dumbbell Curl — 2 × 10–12"],
-    "Legs": ["Pendulum Squat — 3 × 6–8", "Leg Extension — 3 × 8–10", "Lying Hamstring Curl — 3 × 8–10", "Hip Thrust — 3 × 8–12", "Cable Crunch — 2 × 12–15", "Russian Twist — 2 × 15"],
-    "Legs · Mobility": ["Goblet Squat — 2 × 10", "Side Squat — 2 × 10", "Dumbbell Romanian Deadlift — 2 × 10"],
-}
-# Which days to use for each lifting frequency, in weekly order (Mon, Tue, Thu, Fri, Sun, Sat).
-ROUTINE_BY_DAYS = {
-    2: ["Chest, Triceps & Shoulders", "Back & Biceps"],
-    3: ["Chest, Triceps & Shoulders", "Back & Biceps", "Legs"],
-    4: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Legs"],
-    5: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Back & Biceps · Volume", "Legs"],
-    6: ["Chest, Triceps & Shoulders", "Back & Biceps", "Chest, Triceps & Shoulders · Volume", "Back & Biceps · Volume", "Legs", "Legs · Mobility"],
-}
-
-
-LIFT_DAY_OFFSETS = [0, 1, 3, 4, 6, 5]  # Mon, Tue, Thu, Fri, Sun, Sat
-
-
-def logged_routine_workouts(days: int = 6) -> list[tuple[str, list[str]]]:
-    return [(title, ROUTINE_DAYS[title]) for title in ROUTINE_BY_DAYS[max(2, min(6, days))]]
-
-
-def cap_sets(line: str, cap: int) -> str:
-    return re.sub(r"(\d+)(\s*[×x]\s*)", lambda m: f"{min(int(m.group(1)), cap)}{m.group(2)}", line, count=1)
-
-
-def add_set(line: str, maximum: int = 4) -> str:
-    return re.sub(r"(\d+)(\s*[×x]\s*)", lambda m: f"{min(int(m.group(1)) + 1, max(maximum, int(m.group(1))))}{m.group(2)}", line, count=1)
-
-
-def phase_lines(lines: list[str], phase: str) -> list[str]:
-    """Volume across the block: Deload caps every lift at 2 sets; Build adds a set to the
-    first two (main) lifts; Re-entry and Foundation use the template as written."""
-    if phase == "Deload":
-        return [cap_sets(line, 2) for line in lines]
-    if phase == "Build":
-        return [add_set(line) if index < 2 else line for index, line in enumerate(lines)]
-    return list(lines)
-
-
-def strength_workouts(split: str, avoid: str) -> list[tuple[str, list[str]]]:
-    lower_single_leg = "Leg Press — 3 × 10–12" if "bulgarian" in avoid.lower() else "Bulgarian Split Squat — 3 × 8–10"
-    body_part = [
-        ("Chest, Triceps & Shoulders", ["Barbell Bench Press — 4 × 5–8", "Incline Dumbbell Press — 3 × 8–12", "Cable Lateral Raise — 3 × 12–15", "Triceps Pressdown — 3 × 10–15", "Overhead Cable Extension — 2 × 10–15"]),
-        ("Lower · Squat Focus", ["Back Squat — 4 × 5–8", "Romanian Deadlift — 3 × 6–10", lower_single_leg, "Leg Curl — 3 × 10–15", "Standing Calf Raise — 3 × 10–15"]),
-        ("Back & Biceps", ["Pull-up or Lat Pulldown — 4 × 6–10", "Chest-Supported Row — 4 × 6–10", "Rear-Delt Fly — 3 × 12–15", "Cable Curl — 3 × 8–12", "Hammer Curl — 3 × 10–15"]),
-        ("Chest, Triceps & Shoulders · Volume", ["Dumbbell Bench Press — 3 × 8–12", "Overhead Press — 3 × 6–10", "Cable Fly — 3 × 10–15", "Cable Lateral Raise — 3 × 12–15", "Triceps Pressdown — 3 × 10–15"]),
-        ("Lower · Hinge Focus", ["Deadlift or Trap-Bar Deadlift — 3 × 3–6", "Front Squat or Leg Press — 3 × 8–12", "Hip Thrust — 3 × 8–12", "Leg Extension — 2 × 12–15", "Seated Calf Raise — 3 × 10–15"]),
-        ("Back & Biceps · Volume", ["Lat Pulldown — 3 × 8–12", "Single-Arm Cable Row — 3 × 10–12", "Face Pull — 3 × 12–15", "Incline Dumbbell Curl — 3 × 10–12", "Hammer Curl — 3 × 10–15"]),
-    ]
-    if split == "logged-routine":
-        return logged_routine_workouts()
-    if split == "body-part-balanced":
-        return body_part
-    if split == "push-pull-legs":
-        return [
-            ("Push", ["Barbell Bench Press — 4 × 5–8", "Overhead Press — 3 × 6–10", "Cable Fly — 3 × 10–15", "Cable Lateral Raise — 3 × 12–15", "Triceps Pressdown — 3 × 10–15"]),
-            ("Pull", ["Pull-up or Lat Pulldown — 4 × 6–10", "Chest-Supported Row — 4 × 6–10", "Rear-Delt Fly — 3 × 12–15", "Cable Curl — 3 × 8–12", "Hammer Curl — 3 × 10–15"]),
-            ("Legs", ["Back Squat — 4 × 5–8", "Romanian Deadlift — 3 × 6–10", lower_single_leg, "Leg Curl — 3 × 10–15", "Standing Calf Raise — 3 × 10–15"]),
-        ] * 2
-    if split == "full-body":
-        return [
-            ("Full Body A", ["Back Squat — 3 × 5–8", "Barbell Bench Press — 3 × 5–8", "Chest-Supported Row — 3 × 8–12", "Cable Lateral Raise — 2 × 12–15"]),
-            ("Full Body B", ["Romanian Deadlift — 3 × 6–10", "Overhead Press — 3 × 6–10", "Lat Pulldown — 3 × 8–12", "Cable Curl — 2 × 10–15"]),
-            ("Full Body C", ["Leg Press — 3 × 10–12", "Dumbbell Bench Press — 3 × 8–12", "Single-Arm Cable Row — 3 × 10–12", "Triceps Pressdown — 2 × 10–15"]),
-        ] * 2
-    return [
-        ("Upper A", ["Barbell Bench Press — 4 × 5–8", "Chest-Supported Row — 4 × 6–10", "Incline Dumbbell Press — 3 × 8–12", "Lat Pulldown — 3 × 8–12", "Cable Lateral Raise — 3 × 12–15"]),
-        ("Lower A", ["Back Squat — 4 × 5–8", "Romanian Deadlift — 3 × 6–10", lower_single_leg, "Leg Curl — 3 × 10–15", "Standing Calf Raise — 3 × 10–15"]),
-        ("Push", ["Overhead Press — 4 × 5–8", "Dumbbell Bench Press — 3 × 8–12", "Cable Fly — 3 × 10–15", "Cable Lateral Raise — 3 × 12–15", "Triceps Pressdown — 3 × 10–15"]),
-        ("Pull", ["Pull-up or Lat Pulldown — 4 × 6–10", "Barbell or Chest-Supported Row — 4 × 6–10", "Rear-Delt Fly — 3 × 12–15", "Cable Curl — 3 × 8–12", "Hammer Curl — 3 × 10–15"]),
-        ("Lower B", ["Deadlift or Trap-Bar Deadlift — 3 × 3–6", "Front Squat or Leg Press — 3 × 8–12", "Hip Thrust — 3 × 8–12", "Leg Extension — 2 × 12–15", "Seated Calf Raise — 3 × 10–15"]),
-    ]
-
-
-def build_draft(request: BlockDraftRequest) -> dict[str, Any]:
-    start = monday_on_or_after(date.today())
-    if request.split == "logged-routine":
-        lifting = logged_routine_workouts(request.lifting_days)
-    else:
-        lifting = strength_workouts(request.split, request.avoid)[:request.lifting_days]
-    week_template: list[tuple[int, str, str, int, str, list[str]]] = []
-    lifting_days = LIFT_DAY_OFFSETS[:len(lifting)]
-    for day_offset, (title, workout) in zip(lifting_days, lifting):
-        week_template.append((day_offset, "strength", title, request.available_minutes, "Strength session", [canonical_workout_line(line) for line in workout]))
-    if request.run_days:
-        run_offsets = [2, 5, 6][:request.run_days]
-        run_names = ["Easy Run", "Easy Run", "Long Run"]
-        for index, day_offset in enumerate(run_offsets):
-            fraction = 0.2 if index < 2 else 0.35
-            miles = max(1.5, request.starting_miles * fraction)
-            week_template.append((day_offset, "run", run_names[index], max(25, int(miles * 11)), f"Easy conversational effort · about {miles:.1f} mi in week 1", ["Easy effort — conversational pace", "Record distance, time, average HR, maximum HR, and effort"] ))
-    if request.include_mobility:
-        week_template.append((6, "mobility", "Mobility & recovery", 20, "Optional low-intensity mobility session", ["Mobility flow — 20 minutes", "Keep the effort restorative"] ))
-    sessions: list[dict[str, Any]] = []
-    phases: list[dict[str, Any]] = []
-    for week in range(1, request.weeks + 1):
-        phase, message = phase_for(week, request.weeks)
-        phases.append({"week": week, "name": phase, "message": message})
-        run_multiplier = 1 if phase == "Deload" else 1 + ((week - 1) * 0.06)
-        for day_offset, kind, title, minutes, description, workout in week_template:
-            scheduled = start + timedelta(days=(week - 1) * 7 + day_offset)
-            session_title = f"W{week} · {title}"
-            session_description = f"{phase}: {description}"
-            if kind == "run":
-                initial = request.starting_miles * (0.2 if title != "Long Run" else 0.35)
-                target_miles = max(1.5, initial * run_multiplier)
-                session_description = f"{phase}: easy effort · target {target_miles:.1f} mi"
-                minutes = max(25, int(target_miles * 11))
-            lines = phase_lines(workout, phase) if kind == "strength" else list(workout)
-            sessions.append({"id": f"block-{uuid4().hex[:12]}", "date": scheduled.isoformat(), "kind": kind, "title": session_title, "minutes": minutes, "description": session_description, "workout": lines, "status": "planned", "locked": False})
-    return {"id": f"plan-{uuid4().hex[:12]}", "name": request.name, "start_date": start.isoformat(), "goals": request.goals, "config": request.model_dump(), "phases": phases, "sessions": sessions}
-
-
-BACKUP_DIR = ROOT / "backups"
-
-
-def auto_backup(min_hours: float = 20, keep: int = 14) -> Path | None:
-    """Daily safety copy: snapshot the database if the newest automatic backup is older than
-    `min_hours`, and keep only the newest `keep` automatic ones. Manual backups are never pruned."""
-    if not DATABASE.exists():
-        return None
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    existing = sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))
-    if existing and (datetime.now().timestamp() - existing[-1].stat().st_mtime) < min_hours * 3600:
-        return None
-    destination = BACKUP_DIR / f"auto_health_hub_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
-    with sqlite3.connect(DATABASE) as source, sqlite3.connect(destination) as target:
-        source.backup(target)
-    for old in sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))[:-keep]:
-        old.unlink(missing_ok=True)
-    return destination
-
-
-def connection() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DATABASE)
-    db.row_factory = sqlite3.Row
-    return db
-
-
-def initialize() -> None:
-    with connection() as db:
-        db.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                session_date TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                title TEXT NOT NULL,
-                minutes INTEGER NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                workout_json TEXT NOT NULL DEFAULT '[]',
-                status TEXT NOT NULL DEFAULT 'planned',
-                locked INTEGER NOT NULL DEFAULT 0,
-                source TEXT NOT NULL DEFAULT 'training-planner'
-            );
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                completed_at TEXT NOT NULL,
-                minutes INTEGER NOT NULL,
-                notes TEXT NOT NULL DEFAULT '',
-                metrics_json TEXT NOT NULL DEFAULT '{}'
-            );
-            CREATE TABLE IF NOT EXISTS checkins (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                checked_at TEXT NOT NULL,
-                available_minutes INTEGER NOT NULL,
-                readiness INTEGER NOT NULL,
-                soreness INTEGER NOT NULL,
-                location TEXT NOT NULL,
-                recommendation TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS set_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                exercise_index INTEGER NOT NULL,
-                set_number INTEGER NOT NULL,
-                weight REAL NOT NULL,
-                reps INTEGER NOT NULL,
-                rpe REAL,
-                note TEXT NOT NULL DEFAULT '',
-                completed_at TEXT NOT NULL,
-                UNIQUE(session_id, exercise_index, set_number)
-            );
-            CREATE TABLE IF NOT EXISTS plans (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'draft',
-                plan_json TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS daily_health (
-                checkin_date TEXT PRIMARY KEY,
-                sleep_hours REAL NOT NULL,
-                sleep_quality INTEGER NOT NULL,
-                energy INTEGER NOT NULL,
-                soreness INTEGER NOT NULL,
-                stress INTEGER NOT NULL,
-                weight_lbs REAL,
-                protein_goal_met INTEGER NOT NULL DEFAULT 0,
-                notes TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS imported_activities (
-                id TEXT PRIMARY KEY,
-                source TEXT NOT NULL,
-                activity_date TEXT NOT NULL,
-                activity_type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                distance_miles REAL,
-                duration_minutes REAL,
-                average_hr INTEGER,
-                max_hr INTEGER,
-                elevation_feet REAL,
-                details_json TEXT NOT NULL DEFAULT '{}',
-                imported_at TEXT NOT NULL,
-                linked_session_id TEXT
-            );
-            CREATE TABLE IF NOT EXISTS garmin_daily_metrics (
-                calendar_date TEXT PRIMARY KEY,
-                steps INTEGER,
-                active_calories REAL,
-                total_calories REAL,
-                resting_hr INTEGER,
-                hrv_ms REAL,
-                sleep_seconds INTEGER,
-                stress_avg REAL,
-                body_battery INTEGER,
-                source_json TEXT NOT NULL DEFAULT '{}',
-                synced_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS races (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                race_date TEXT NOT NULL,
-                distance TEXT NOT NULL,
-                goal_seconds INTEGER,
-                settings_json TEXT NOT NULL DEFAULT '{}',
-                plan_json TEXT NOT NULL DEFAULT '{}',
-                applied_at TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS garmin_sync_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                started_at TEXT NOT NULL,
-                finished_at TEXT,
-                status TEXT NOT NULL,
-                activities_imported INTEGER NOT NULL DEFAULT 0,
-                metrics_updated INTEGER NOT NULL DEFAULT 0,
-                message TEXT NOT NULL DEFAULT ''
-            );
-            """
-        )
-        existing = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-        if existing == 0:
-            import_legacy_sessions(db)
-        apply_exercise_aliases(db)
-
-
-def import_legacy_sessions(db: sqlite3.Connection) -> None:
-    """One-way starter import; existing Training Planner files remain untouched."""
-    if not LEGACY_FILE.exists():
-        return
-    try:
-        payload = json.loads(LEGACY_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    for rows in payload.get("weeks", {}).values():
-        for item in rows if isinstance(rows, list) else []:
-            if not isinstance(item, dict) or not item.get("id"):
-                continue
-            cursor = db.execute(
-                """INSERT OR IGNORE INTO sessions
-                   (id, session_date, kind, title, minutes, description, workout_json, status, locked, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    str(item["id"]), item.get("date", date.today().isoformat()), item.get("kind", "strength"),
-                    item.get("title", "Training session"), int(item.get("minutes", 45)), item.get("description", ""),
-                    json.dumps(item.get("workout", [])), item.get("status", "planned"), int(bool(item.get("locked"))), "legacy-import",
-                ),
-            )
-
-
-def row_to_session(row: sqlite3.Row) -> dict[str, Any]:
-    return {
-        "id": row["id"], "date": row["session_date"], "kind": row["kind"], "title": row["title"],
-        "minutes": row["minutes"], "description": row["description"], "workout": json.loads(row["workout_json"]),
-        "status": row["status"], "locked": bool(row["locked"]),
-    }
-
-
-# Different names for the same exercise, mapped to the name used in the lifting log.
-# Progress, last-weight suggestions, and planned workouts all use the right-hand name.
-EXERCISE_ALIASES = {
-    "triceps pressdown": "Rope Pushdown",
-    "overhead cable extension": "Overhead Cable Tricep Extension",
-    "overhead press": "Barbell Overhead Press",
-    "pull-up or lat pulldown": "Lat Pulldown",
-    "cable chest fly": "Cable Fly",
-}
-
-
-def canonical_exercise(name: str) -> str:
-    cleaned = re.sub(r"\s+", " ", name.strip())
-    return EXERCISE_ALIASES.get(cleaned.lower(), cleaned)
-
-
-def canonical_workout_line(line: str) -> str:
-    name, separator, prescription = line.partition("—")
-    canonical = canonical_exercise(name)
-    return f"{canonical} —{prescription}" if separator else canonical
-
-
-def normalize_exercise(name: str) -> str:
-    return canonical_exercise(name).lower()
-
-
-def retemplate_future_strength(db: sqlite3.Connection, plan_id: str) -> int:
-    """Switch an active block's future lift days to the logged routine, keeping its dates and phases.
-
-    Only planned, unlocked sessions with no logged sets change; the weekday decides the workout.
-    """
-    row = db.execute("SELECT plan_json FROM plans WHERE id = ?", (plan_id,)).fetchone()
-    if not row:
-        return 0
-    plan = json.loads(row["plan_json"])
-    days = int(plan.get("config", {}).get("lifting_days") or 5)
-    titles = ROUTINE_BY_DAYS[max(2, min(6, days))]
-    by_weekday = {offset: titles[index] for index, offset in enumerate(LIFT_DAY_OFFSETS[:len(titles)])}
-    changed = 0
-    for session in db.execute(
-        """SELECT * FROM sessions s WHERE source = ? AND kind = 'strength' AND status = 'planned' AND locked = 0 AND session_date >= ?
-           AND NOT EXISTS (SELECT 1 FROM set_logs sl WHERE sl.session_id = s.id)""",
-        (f"plan:{plan_id}", date.today().isoformat()),
-    ).fetchall():
-        title = by_weekday.get(date.fromisoformat(session["session_date"]).weekday())
-        if not title:
-            continue
-        week = re.match(r"^(W\d+)\s*·", session["title"] or "")
-        phase = (session["description"] or "").split(":", 1)[0].strip()
-        lines = phase_lines(ROUTINE_DAYS[title], phase)
-        db.execute("UPDATE sessions SET title = ?, workout_json = ? WHERE id = ?",
-                   (f"{week.group(1)} · {title}" if week else title, json.dumps(lines), session["id"]))
-        changed += 1
-    plan.setdefault("config", {})["split"] = "logged-routine"
-    db.execute("UPDATE plans SET plan_json = ? WHERE id = ?", (json.dumps(plan), plan_id))
-    return changed
-
-
-def apply_exercise_aliases(db: sqlite3.Connection) -> int:
-    """Rename aliased exercises in planned sessions (idempotent). Logged history keeps its original text."""
-    changed = 0
-    for row in db.execute("SELECT id, workout_json FROM sessions WHERE status = 'planned'").fetchall():
-        lines = json.loads(row["workout_json"] or "[]")
-        renamed = [canonical_workout_line(line) for line in lines]
-        if renamed != lines:
-            db.execute("UPDATE sessions SET workout_json = ? WHERE id = ?", (json.dumps(renamed), row["id"]))
-            changed += 1
-    return changed
-
-
-def prescription_details(prescription: str) -> tuple[int, str, str]:
-    """Extract target sets/reps and a transparent no-baseline starting rule."""
-    match = re.search(r"(\d+)\s*[×x]\s*(\d+)(?:\s*[–-]\s*(\d+))?", prescription)
-    if not match:
-        return 3, "RPE 7–8", "No baseline yet: choose a load that leaves about 2–3 reps in reserve."
-    sets, low, high = int(match.group(1)), int(match.group(2)), int(match.group(3) or match.group(2))
-    reps = f"{low}–{high}" if high != low else str(low)
-    if high <= 6:
-        guide = "~75–85% 1RM · RPE 7–8"
-    elif high <= 10:
-        guide = "~65–78% 1RM · RPE 7–8"
-    else:
-        guide = "~55–70% 1RM · RPE 7–8"
-    return sets, reps, f"No baseline yet: use {guide}; stop with 2–3 reps in reserve."
-
-
-def line_target_weight(prescription: str) -> float | None:
-    match = re.search(r"@\s*(\d+(?:\.\d+)?)\s*lb", prescription or "")
-    return float(match.group(1)) if match else None
-
-
-def format_workout_line(name: str, sets: int, reps: str, weight: float | None = None) -> str:
-    reps = re.sub(r"\s+", "", str(reps or "8–12")).replace("-", "–")
-    line = f"{canonical_exercise(name)} — {int(sets)} × {reps}"
-    return f"{line} @ {weight:g} lb" if weight else line
-
-
-def exercise_name_from_session(session: dict[str, Any], exercise_index: int) -> str | None:
-    workout = session.get("workout", [])
-    if exercise_index >= len(workout):
-        return None
-    return workout[exercise_index].partition("—")[0].strip()
-
-
-# Lifts where the logged weight is *added* to bodyweight (0 = bodyweight only).
-BODYWEIGHT_EXERCISES = {"pull-up", "chin-up", "weighted dips", "dips", "push-up"}
-
-
-def is_bodyweight(name: str) -> bool:
-    return canonical_exercise(name).lower() in BODYWEIGHT_EXERCISES
-
-
-def estimate_1rm(name: str, weight: float, reps: int, bodyweight: float | None = None) -> float:
-    """Epley estimate; bodyweight lifts count bodyweight + added load when bodyweight is known."""
-    load = weight + (bodyweight or 0) if is_bodyweight(name) else weight
-    return round(load * (1 + reps / 30), 1) if reps and load else 0.0
-
-
-def get_setting(db: sqlite3.Connection, key: str) -> str | None:
-    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row[0] if row else None
-
-
-def current_bodyweight(db: sqlite3.Connection) -> float | None:
-    """Latest check-in weight, falling back to the bodyweight saved in Settings."""
-    row = db.execute("SELECT weight_lbs FROM daily_health WHERE weight_lbs IS NOT NULL ORDER BY checkin_date DESC LIMIT 1").fetchone()
-    if row:
-        return float(row[0])
-    saved = get_setting(db, "bodyweight_lbs")
-    return float(saved) if saved else None
-
-
-def rest_seconds(name: str, target_reps: str) -> int:
-    """Rest between sets: heavy compounds 3 min, other compounds 2.5 min, isolation 90 s, core 60 s."""
-    from catalog import EXERCISES
-    kinds = {exercise.lower(): kind for exercise, _, _, kind in EXERCISES}
-    kind = kinds.get(canonical_exercise(name).lower())
-    if kind == "core":
-        return 60
-    if kind == "isolation":
-        return 90
-    if kind == "compound":
-        return 180 if rep_bounds(target_reps)[1] <= 6 else 150
-    return 120
-
-
-def rep_bounds(target_reps: str) -> tuple[int, int]:
-    numbers = [int(n) for n in re.findall(r"\d+", target_reps or "")]
-    return (numbers[0], numbers[-1]) if numbers else (8, 12)
-
-
-def weight_step(weight: float) -> float:
-    return 5.0 if weight >= 50 else 2.5
-
-
-def progression_suggestion(history: list[dict[str, Any]], target_reps: str) -> dict[str, Any] | None:
-    """Double progression from the most recent full (non-deload) session of this exercise.
-
-    Work at the heaviest weight used last time. If every set there reached the top of the
-    rep range, add a small step; if any fell below the bottom, hold (or drop a step if
-    well short); otherwise keep the weight and aim for more reps.
-    """
-    if not history:
-        return None
-    by_day: dict[str, list[dict[str, Any]]] = {}
-    for row in history:
-        by_day.setdefault(row["day"], []).append(row)
-    days = sorted(by_day, reverse=True)
-    latest = days[0]
-    is_deload = lambda day: any(r.get("deload") for r in by_day[day])
-    source_day = next((day for day in days if not is_deload(day)), latest)
-    sets = by_day[source_day]
-    top = max(row["weight"] for row in sets)
-    reps_at_top = [row["reps"] for row in sets if row["weight"] == top]
-    low, high = rep_bounds(target_reps)
-    last = f"{top:g} × {', '.join(str(r) for r in reps_at_top)}"
-    prefix = "Back from deload. " if is_deload(latest) and source_day != latest else ""
-    if top <= 0:  # bodyweight-only: progress reps
-        return {"weight": 0, "reps": min(high, max(reps_at_top) + 1), "change": 0, "note": f"{prefix}Bodyweight last time ({', '.join(map(str, reps_at_top))} reps). Add a rep or some weight."}
-    step = weight_step(top)
-    if all(r >= high for r in reps_at_top):
-        return {"weight": top + step, "reps": low, "change": step, "note": f"{prefix}Hit {high}+ reps on every set at {top:g} lb ({last}). Go up to {top + step:g} lb."}
-    if min(reps_at_top) <= low - 3:
-        return {"weight": max(step, top - step), "reps": low, "change": -step, "note": f"{prefix}Well short of {low} reps at {top:g} lb ({last}). Drop to {max(step, top - step):g} lb and rebuild."}
-    if min(reps_at_top) < low:
-        return {"weight": top, "reps": low, "change": 0, "note": f"{prefix}Below {low} reps at {top:g} lb ({last}). Stay here and get every set to {low}."}
-    return {"weight": top, "reps": min(high, max(reps_at_top) + 1), "change": 0, "note": f"{prefix}Stay at {top:g} lb ({last}). Aim for {high} reps on every set, then add weight."}
-
-
-def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
-    """Turn stable workout outline lines into a usable in-gym set logger."""
-    by_exercise: dict[int, list[dict[str, Any]]] = {}
-    for row in rows:
-        by_exercise.setdefault(row["exercise_index"], []).append(dict(row))
-    exercises = []
-    for index, outline in enumerate(session.get("workout", [])):
-        name, _, prescription = outline.partition("—")
-        logged = sorted(by_exercise.get(index, []), key=lambda item: item["set_number"])
-        same_exercise = [dict(row) for row in previous_rows if normalize_exercise(row["exercise_name"]) == normalize_exercise(name)]
-        target_sets, target_reps, starting_guide = prescription_details(prescription.strip() or "Working sets")
-        target_weight = line_target_weight(prescription)
-        history = [{"day": row.get("session_date") or row["completed_at"][:10], "weight": row["weight"], "reps": row["reps"],
-                    "deload": "deload" in (row.get("note") or "").lower() or (row.get("session_description") or "").startswith("Deload")}
-                   for row in same_exercise]
-        suggestion = progression_suggestion(history, target_reps)
-        exercises.append({
-            "rest_seconds": rest_seconds(name, target_reps),
-            "index": index, "name": name.strip(), "prescription": prescription.strip() or "Working sets",
-            "sets": logged, "target_sets": target_sets, "target_reps": target_reps, "target_weight": target_weight,
-            "suggested_weight": target_weight if target_weight is not None else (suggestion["weight"] if suggestion else None),
-            "suggested_reps": suggestion["reps"] if suggestion else None,
-            "progression": suggestion,
-            "starting_guide": suggestion["note"] if suggestion else starting_guide,
-        })
-    return exercises
-
-
-def recommendation(checkin: CheckIn, sessions: list[dict[str, Any]]) -> tuple[str, str | None]:
-    candidates = [session for session in sessions if session["status"] == "planned"]
-    candidates.sort(key=lambda item: (0 if item["kind"] == "strength" else 1, item["date"]))
-    if checkin.readiness <= 3 or checkin.soreness >= 8:
-        return "Recovery first: take 20–30 easy minutes of walking and mobility. No catch-up volume today.", None
-    if not candidates:
-        return "No planned training remains in the next two weeks. A relaxed walk or mobility is enough today.", None
-    target = candidates[0]
-    if checkin.available_minutes < max(20, target["minutes"] * 0.6):
-        if target["kind"] == "strength" and checkin.location == "Apartment gym":
-            return "Apartment backup: do a short back-and-biceps session today. Keep the main gym session for another day.", target["id"]
-        return f"Short version: do the first 2–3 movements of {target['title']} in {checkin.available_minutes} minutes.", target["id"]
-    return f"Do {target['title']} today. It protects your lifting consistency and weekly mileage plan.", target["id"]
-
-
-def health_recommendation(record: dict[str, Any] | None) -> str:
-    """A conservative coaching prompt, not medical advice or an automatic schedule change."""
-    if not record:
-        return "Log a quick health check-in to give today’s training recommendation some context."
-    if record["sleep_hours"] < 5.5 or record["energy"] <= 3 or record["soreness"] >= 8:
-        return "Recovery first: keep movement easy today. A walk, mobility, or a shortened session is more useful than forced catch-up."
-    if record["sleep_hours"] < 6.5 or record["stress"] >= 8:
-        return "Protect recovery today: keep intensity controlled and leave a few reps in reserve."
-    if record["protein_goal_met"]:
-        return "You have a solid recovery foundation today. Follow the planned session and use RPE to guide any load changes."
-    return "Readiness looks workable. Train as planned, then prioritize a protein-focused meal after your session."
-
-
-def mean_metric(rows: list[dict[str, Any]], key: str) -> float | None:
-    values = [float(row[key]) for row in rows if row.get(key) is not None]
-    return round(sum(values) / len(values), 1) if values else None
-
-
-def deterministic_training_recommendation(
-    sessions: list[dict[str, Any]], daily_metrics: list[dict[str, Any]], manual_health: dict[str, Any] | None = None,
-    recent_training_days: int = 0,
-) -> dict[str, Any]:
-    """Explainable rule engine. It never writes, moves, or cancels a session."""
-    today = date.today().isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    has_night = lambda row: row and (row.get("sleep_seconds") is not None or row.get("hrv_ms") is not None)
-    # Garmin files last night's sleep under today's date. Until it syncs, fall back to the
-    # previous night (never older) and say so; anything older is only baseline history.
-    current = next((row for row in daily_metrics if row.get("calendar_date") == today), None)
-    stale_note = None
-    if not has_night(current):
-        previous = next((row for row in daily_metrics if row.get("calendar_date") == yesterday), None)
-        if has_night(previous):
-            current = previous
-            stale_note = f"Today's sleep hasn't synced from Garmin yet, so this uses the previous night ({yesterday})."
-    used_date = current.get("calendar_date") if current else None
-    baseline_rows = [row for row in daily_metrics if row.get("calendar_date") not in {today, used_date}][:28]
-    baseline_hrv = mean_metric(baseline_rows, "hrv_ms")
-    baseline_rhr = mean_metric(baseline_rows, "resting_hr")
-    score = 100
-    reasons: list[str] = []
-    headlines: list[str] = []  # Short, plain-language version of each triggered rule for the Today banner.
-    if current and current.get("sleep_seconds") is not None:
-        sleep_hours = float(current["sleep_seconds"]) / 3600
-        slept = f"You slept {int(sleep_hours)}h {round((sleep_hours % 1) * 60):02d}m."
-        if sleep_hours < 6:
-            score -= 30; reasons.append(f"Sleep was {sleep_hours:.1f}h (under the 6h recovery floor)."); headlines.append(slept)
-        elif sleep_hours < 7:
-            score -= 12; reasons.append(f"Sleep was {sleep_hours:.1f}h (below the 7h target)."); headlines.append(slept)
-        sleep_score = current.get("sleep_score")
-        if sleep_hours >= 6 and sleep_score is not None and float(sleep_score) < 50:
-            score -= 8; reasons.append(f"Garmin sleep score was {round(float(sleep_score))} (poor quality)."); headlines.append("Sleep quality was poor.")
-    hrv_flagged = False
-    if current and baseline_hrv and current.get("hrv_ms") is not None and float(current["hrv_ms"]) <= baseline_hrv * 0.85:
-        drop = round((1 - float(current["hrv_ms"]) / baseline_hrv) * 100)
-        score -= 20; reasons.append(f"HRV is {drop}% below your rolling baseline."); headlines.append(f"HRV is {drop}% below baseline.")
-        hrv_flagged = True
-    hrv_status = str((current or {}).get("hrv_status") or "").upper()
-    if not hrv_flagged and hrv_status in {"LOW", "POOR"}:
-        score -= 15; reasons.append("Garmin HRV status is low."); headlines.append("HRV status is low.")
-    elif not hrv_flagged and hrv_status == "UNBALANCED":
-        score -= 8; reasons.append("Garmin HRV status is unbalanced."); headlines.append("HRV status is unbalanced.")
-    wake_battery = (current or {}).get("body_battery_at_wake")
-    if wake_battery is not None and float(wake_battery) < 25:
-        score -= 12; reasons.append(f"Body Battery was only {round(float(wake_battery))} at wake."); headlines.append(f"Body Battery woke at {round(float(wake_battery))}.")
-    elif wake_battery is not None and float(wake_battery) < 40:
-        score -= 6; reasons.append(f"Body Battery was {round(float(wake_battery))} at wake (below 40).")
-    if recent_training_days >= 3:
-        score -= 5; reasons.append("You trained each of the last 3 days."); headlines.append("Three training days in a row.")
-    if current and baseline_rhr and current.get("resting_hr") is not None and float(current["resting_hr"]) >= baseline_rhr * 1.08:
-        rise = round((float(current["resting_hr"]) / baseline_rhr - 1) * 100)
-        score -= 15; reasons.append(f"Resting HR is {rise}% above your rolling baseline."); headlines.append(f"Resting HR is {rise}% above baseline.")
-    if current and current.get("stress_avg") is not None and float(current["stress_avg"]) >= 65:
-        score -= 10; reasons.append("Garmin stress average is elevated (65 or above)."); headlines.append("Stress is running high.")
-    if manual_health:
-        if int(manual_health.get("soreness", 0)) >= 8:
-            score -= 30; reasons.append("Manual soreness is 8/10 or higher."); headlines.append("You logged high soreness.")
-        elif int(manual_health.get("soreness", 0)) >= 6:
-            score -= 8; reasons.append("Manual soreness is 6/10 or higher."); headlines.append("You logged some soreness.")
-        if int(manual_health.get("energy", 10)) <= 3:
-            score -= 25; reasons.append("Manual energy is 3/10 or lower."); headlines.append("You logged low energy.")
-        elif int(manual_health.get("energy", 10)) <= 5:
-            score -= 8; reasons.append("Manual energy is 5/10 or lower."); headlines.append("You logged lowish energy.")
-    score = max(0, score)
-    planned = [session for session in sessions if session.get("status") == "planned"]
-    planned.sort(key=lambda session: (0 if session.get("date") == today else 1, session.get("date", ""), session.get("title", "")))
-    target = next((session for session in planned if session.get("locked")), None) or (planned[0] if planned else None)
-    target_name = re.sub(r"^W\d+\s*·\s*", "", target["title"]) if target else "your next training block"
-    adjusted_sets: int | None = None
-    adjusted_minutes: int | None = None
-    if score <= 50:
-        title, mode = "Recovery-first day", "recovery"
-        guidance = "Take 20–30 easy minutes of walking and mobility, or rest. Do not add catch-up volume today."
-        action = "Take an easy walk or mobility today, or rest."
-    elif score <= 75:
-        title, mode = "Use the short version", "shorten"
-        if target and target.get("kind") == "run":
-            adjusted_minutes = max(20, round(target.get("minutes", 30) * 0.6))
-            guidance = f"Keep {target_name} easy and cap it around {adjusted_minutes} minutes. Skip intensity."
-            action = f"Keep the run easy and cap it around {adjusted_minutes} min."
-        elif target:
-            # Keep every exercise for consistency; trim volume by capping each at two working sets.
-            adjusted_sets = 2
-            adjusted_minutes = max(25, round(target.get("minutes", 45) * 0.6))
-            guidance = f"Keep every lift in {target_name} but cap each at 2 working sets (about {adjusted_minutes} minutes). Leave 2–3 reps in reserve."
-            action = f"Keep the lifts, cut each to 2 sets (about {adjusted_minutes} min)."
-        else:
-            guidance = "Keep activity easy today and reassess after a check-in tomorrow."
-            action = "Keep activity easy today."
-    elif target:
-        title, mode = "Planned session is appropriate", "train"
-        guidance = f"Do {target_name} as planned. Keep the opening working sets controlled and adjust load by effort."
-        action = "Train as planned."
-    else:
-        title, mode = "No session needs moving", "rest"
-        guidance = "You have no planned session in the next week. A relaxed walk or mobility is enough today."
-        action = "No session planned. An easy walk is plenty."
-    if not reasons:
-        reasons.append("No recovery flag crossed a conservative threshold; recommendation is based on the planned session.")
-    if stale_note:
-        reasons.insert(0, stale_note)
-    elif not current:
-        reasons.insert(0, "No Garmin sleep or HRV for last night yet; the score uses only your check-in.")
-    return {
-        "engine": "deterministic-v2", "score": score, "mode": mode, "title": title, "guidance": guidance,
-        "data_date": used_date, "data_is_stale": bool(stale_note),
-        "headline": " ".join([*headlines[:1], action]),
-        "adjusted_sets": adjusted_sets, "adjusted_minutes": adjusted_minutes,
-        "target_session": {"id": target["id"], "title": target["title"], "date": target.get("date"), "kind": target.get("kind"), "minutes": target.get("minutes"), "locked": bool(target.get("locked"))} if target else None,
-        "reasons": reasons,
-        "signals": {"sleep_hours": round(float(current["sleep_seconds"]) / 3600, 1) if current and current.get("sleep_seconds") is not None else None, "hrv": current.get("hrv_ms") if current else None, "hrv_baseline": baseline_hrv, "resting_hr": current.get("resting_hr") if current else None, "resting_hr_baseline": baseline_rhr, "manual_energy": manual_health.get("energy") if manual_health else None, "manual_soreness": manual_health.get("soreness") if manual_health else None},
-    }
-
-
-def parse_number(value: Any) -> float | None:
-    if value is None:
-        return None
-    match = re.search(r"-?[\d,.]+", str(value))
-    if not match:
-        return None
-    try:
-        return float(match.group(0).replace(",", ""))
-    except ValueError:
-        return None
-
-
-def parse_duration_minutes(value: Any) -> float | None:
-    if value is None:
-        return None
-    numeric = parse_number(value)
-    text = str(value).strip()
-    if ":" not in text:
-        return numeric
-    try:
-        pieces = [float(part) for part in text.split(":")]
-        if len(pieces) == 3:
-            return pieces[0] * 60 + pieces[1] + pieces[2] / 60
-        if len(pieces) == 2:
-            return pieces[0] + pieces[1] / 60
-    except ValueError:
-        return numeric
-    return numeric
-
-
-def parse_iso_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def activity_id(source: str, activity: dict[str, Any]) -> str:
-    signature = "|".join(str(activity.get(key, "")) for key in ("activity_date", "activity_type", "title", "distance_miles", "duration_minutes"))
-    return f"activity-{hashlib.sha256(f'{source}|{signature}'.encode()).hexdigest()[:20]}"
-
-
-def point_distance_miles(one: tuple[float, float], two: tuple[float, float]) -> float:
-    lat1, lon1 = map(math.radians, one)
-    lat2, lon2 = map(math.radians, two)
-    delta_lat, delta_lon = lat2 - lat1, lon2 - lon1
-    a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
-    return 3958.8 * 2 * math.asin(math.sqrt(a))
-
-
-def normalize_activity(payload: dict[str, Any], source: str) -> dict[str, Any] | None:
-    activity_type = str(payload.get("activity_type") or "Activity").strip()
-    title = str(payload.get("title") or activity_type).strip()
-    activity_date = str(payload.get("activity_date") or "").strip()[:10]
-    if not activity_date:
-        return None
-    item = {
-        "activity_date": activity_date,
-        "activity_type": activity_type,
-        "title": title,
-        "distance_miles": payload.get("distance_miles"),
-        "duration_minutes": payload.get("duration_minutes"),
-        "average_hr": payload.get("average_hr"),
-        "max_hr": payload.get("max_hr"),
-        "elevation_feet": payload.get("elevation_feet"),
-        "details": payload.get("details", {}),
-    }
-    item["id"] = activity_id(source, item)
-    return item
-
-
-def parse_garmin_csv(text: str) -> list[dict[str, Any]]:
-    rows = list(csv.DictReader(io.StringIO(text)))
-    activities = []
-    for row in rows:
-        lowered = {str(key).lower().strip(): value for key, value in row.items()}
-        raw_type = lowered.get("activity type") or lowered.get("type") or "Activity"
-        if "run" not in str(raw_type).lower():
-            continue
-        raw_date = lowered.get("date") or lowered.get("activity date") or lowered.get("start time")
-        parsed = parse_iso_time(raw_date)
-        date_value = parsed.date().isoformat() if parsed else (str(raw_date or "")[:10])
-        distance = parse_number(lowered.get("distance"))
-        if distance and "km" in str(lowered.get("distance", "")).lower():
-            distance *= 0.621371
-        activities.append({
-            "activity_date": date_value,
-            "activity_type": "Run",
-            "title": lowered.get("title") or lowered.get("activity name") or "Garmin run",
-            "distance_miles": distance,
-            "duration_minutes": parse_duration_minutes(lowered.get("time") or lowered.get("duration") or lowered.get("moving time")),
-            "average_hr": parse_number(lowered.get("avg hr") or lowered.get("average heart rate")),
-            "max_hr": parse_number(lowered.get("max hr") or lowered.get("maximum heart rate")),
-            "elevation_feet": parse_number(lowered.get("elev gain") or lowered.get("elevation gain")),
-            "details": {"source_row": row},
-        })
-    return activities
-
-
-def parse_xml_activity(content: bytes, source: str) -> list[dict[str, Any]]:
-    root = ET.fromstring(content)
-    tag = root.tag.lower()
-    points = []
-    times, heart_rates = [], []
-    distances = []
-    for node in root.iter():
-        local = node.tag.rsplit("}", 1)[-1]
-        if local == "Trackpoint":
-            lat = node.findtext(".//{*}LatitudeDegrees")
-            lon = node.findtext(".//{*}LongitudeDegrees")
-            if lat and lon:
-                points.append((float(lat), float(lon)))
-            timestamp = node.findtext(".//{*}Time")
-            if timestamp:
-                times.append(parse_iso_time(timestamp))
-            distance = parse_number(node.findtext(".//{*}DistanceMeters"))
-            if distance is not None:
-                distances.append(distance)
-            heart_rate = parse_number(node.findtext(".//{*}HeartRateBpm/{*}Value"))
-            if heart_rate is not None:
-                heart_rates.append(int(heart_rate))
-    if not times:
-        return []
-    distance_miles = (max(distances) / 1609.344) if distances else sum(point_distance_miles(points[index - 1], point) for index, point in enumerate(points) if index)
-    duration = (times[-1] - times[0]).total_seconds() / 60 if len(times) > 1 and times[0] and times[-1] else None
-    return [{
-        "activity_date": times[0].date().isoformat(), "activity_type": "Run", "title": f"Imported {source.upper()} run",
-        "distance_miles": round(distance_miles, 2) if distance_miles else None,
-        "duration_minutes": round(duration, 1) if duration else None,
-        "average_hr": round(sum(heart_rates) / len(heart_rates)) if heart_rates else None,
-        "max_hr": max(heart_rates) if heart_rates else None,
-        "elevation_feet": None, "details": {"track_points": len(points)},
-    }]
-
-
-@app.on_event("startup")
-def startup() -> None:
-    initialize()
-    try:
-        auto_backup()
-    except (OSError, sqlite3.Error):
-        pass  # a failed backup must never stop the app from starting
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @app.get("/api/overview")
@@ -1135,17 +391,6 @@ def training_recommendation() -> dict[str, Any]:
     )
 
 
-def workout_lines(session: dict[str, Any], cap_sets: int | None = None) -> list[dict[str, Any]]:
-    """Split 'Exercise — 3 × 8–12' lines into display rows, optionally capping sets."""
-    rows = []
-    for line in session.get("workout", []):
-        name, _, prescription = line.partition("—")
-        match = re.search(r"(\d+)\s*[×x]\s*(\d+(?:\s*[–-]\s*\d+)?)", prescription)
-        sets = int(match.group(1)) if match else None
-        reps = re.sub(r"\s+", "", match.group(2)).replace("-", "–") if match else None
-        shown_sets = min(sets, cap_sets) if sets and cap_sets else sets
-        rows.append({"name": name.strip(), "sets": shown_sets, "planned_sets": sets, "reps": reps, "note": None if match else prescription.strip() or None})
-    return rows
 
 
 def plan_position(today: date) -> dict[str, Any] | None:
@@ -1310,78 +555,10 @@ async def import_activity_file(file: UploadFile = File(...)) -> dict[str, Any]:
     return {"imported": len(saved), "activities": saved}
 
 
-def garmin_activity_kind(activity_type: str) -> str | None:
-    lowered = (activity_type or "").lower()
-    if "run" in lowered:
-        return "run"
-    if "strength" in lowered:
-        return "strength"
-    return None
 
 
-def match_garmin_activities(db: sqlite3.Connection) -> int:
-    """Pair each unlinked Garmin activity with the same-day session of the same kind.
-
-    A still-planned session is marked completed using Garmin's duration/HR, so a
-    workout recorded on the watch and planned here appears once, not twice. A
-    session already completed in Health Hub is only linked. Activities with no
-    same-day, same-kind session stay as standalone history.
-    """
-    today = date.today().isoformat()
-    rows = db.execute(
-        "SELECT * FROM imported_activities WHERE linked_session_id IS NULL AND source = 'Garmin API' AND activity_date <= ? ORDER BY activity_date, imported_at",
-        (today,),
-    ).fetchall()
-    matched = 0
-    # Pass 1 links same-day pairs for every activity; pass 2 lets leftovers take a planned
-    # session shifted by one day, so a shifted activity never steals another day's match.
-    leftovers = []
-    for shifted, candidates in ((False, rows), (True, leftovers)):
-        for activity in list(candidates):
-            matched += _link_activity(db, activity, shifted, leftovers)
-    return matched
 
 
-def _link_activity(db: sqlite3.Connection, activity: sqlite3.Row, shifted: bool, leftovers: list) -> int:
-    kind = garmin_activity_kind(activity["activity_type"])
-    if not kind:
-        return 0
-    if not shifted:
-        session = db.execute(
-            """SELECT * FROM sessions WHERE session_date = ? AND kind = ? AND status IN ('planned', 'completed')
-               ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, title LIMIT 1""",
-            (activity["activity_date"], kind),
-        ).fetchone()
-        if not session:
-            leftovers.append(activity)
-            return 0
-    else:
-        day = date.fromisoformat(activity["activity_date"])
-        session = db.execute(
-            """SELECT * FROM sessions s WHERE kind = ? AND status = 'planned' AND session_date IN (?, ?)
-               AND NOT EXISTS (SELECT 1 FROM imported_activities a WHERE a.linked_session_id = s.id)
-               ORDER BY session_date, title LIMIT 1""",
-            (kind, (day - timedelta(days=1)).isoformat(), (day + timedelta(days=1)).isoformat()),
-        ).fetchone()
-        if not session:
-            return 0
-    if session["status"] == "planned":
-        metrics: dict[str, Any] = {
-            "source": "Garmin (matched automatically)", "garmin_activity_id": activity["id"],
-            "duration_minutes": activity["duration_minutes"], "average_hr": activity["average_hr"], "max_hr": activity["max_hr"],
-        }
-        if kind == "run" and activity["distance_miles"]:
-            metrics["distance_miles"] = activity["distance_miles"]
-            if activity["duration_minutes"]:
-                metrics["pace_seconds_per_mile"] = round(activity["duration_minutes"] * 60 / activity["distance_miles"])
-        note = f"Completed from a Garmin activity on {activity['activity_date']}." if shifted else "Completed from a Garmin activity on the same day."
-        db.execute("UPDATE sessions SET status = 'completed' WHERE id = ?", (session["id"],))
-        db.execute(
-            "INSERT INTO logs (session_id, completed_at, minutes, notes, metrics_json) VALUES (?, ?, ?, ?, ?)",
-            (session["id"], datetime.now().astimezone().isoformat(timespec="seconds"), round(activity["duration_minutes"] or session["minutes"]), note, json.dumps(metrics)),
-        )
-    db.execute("UPDATE imported_activities SET linked_session_id = ? WHERE id = ?", (session["id"], activity["id"]))
-    return 1
 
 
 @app.post("/api/activities/{activity_id}/link")

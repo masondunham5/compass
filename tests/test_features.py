@@ -13,15 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
+import core  # noqa: E402
 import catalog  # noqa: E402
 import race_plan  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def temp_database(tmp_path, monkeypatch):
-    monkeypatch.setattr(app, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(app, "DATABASE", tmp_path / "test.db")
-    monkeypatch.setattr(app, "LEGACY_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(core, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(core, "DATABASE", tmp_path / "test.db")
+    monkeypatch.setattr(core, "LEGACY_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(core, "BACKUP_DIR", tmp_path / "backups")
     app.initialize()
 
 

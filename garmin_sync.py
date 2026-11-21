@@ -30,7 +30,8 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app import activity_id, connection, initialize, match_garmin_activities, normalize_activity
+from activities import match_garmin_activities, normalize_activity
+from core import auto_backup, connection, initialize
 
 
 BASE_URL = "https://personal.connectapi.garmin.com"
@@ -481,6 +482,10 @@ def run_sync(days: int = 2, progress: Callable[[str], None] | None = None) -> di
     days = max(1, min(int(days), 30))
     report = progress or (lambda _message: None)
     initialize()
+    try:
+        auto_backup()  # snapshot before the sync writes anything (at most once a day)
+    except (OSError, sqlite3.Error):
+        pass
     started = _now()
     with connection() as db:
         ensure_schema(db)

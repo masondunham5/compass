@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +70,39 @@ def test_short_day_keeps_every_lift_at_two_sets():
     assert result["headline"] == "You slept 5h 36m. Keep the lifts, cut each to 2 sets (about 36 min)."
     lines = app.workout_lines({"workout": ["Dumbbell Bench Press — 3 × 8–12", "Cable Fly — 1 × 15", "Easy effort — conversational pace"]}, cap_sets=2)
     assert [(line["name"], line["sets"], line["reps"]) for line in lines] == [("Dumbbell Bench Press", 2, "8–12"), ("Cable Fly", 1, "15"), ("Easy effort", None, None)]
+
+
+def test_double_progression_suggestions():
+    history = [{"day": "2026-11-10", "weight": 225, "reps": r, "deload": False} for r in (6, 6, 6)]
+    assert app.progression_suggestion(history, "4–6")["weight"] == 230
+    short = [{"day": "2026-11-10", "weight": 225, "reps": r, "deload": False} for r in (6, 5, 3)]
+    assert app.progression_suggestion(short, "4–6")["weight"] == 225
+    way_short = [{"day": "2026-11-10", "weight": 60, "reps": 5, "deload": False}]
+    assert app.progression_suggestion(way_short, "8–10")["weight"] == 55
+    # After a deload, progress from the last full session instead.
+    with_deload = history + [{"day": "2026-11-17", "weight": 185, "reps": 6, "deload": True}]
+    suggestion = app.progression_suggestion(with_deload, "4–6")
+    assert suggestion["weight"] == 230 and suggestion["note"].startswith("Back from deload")
+    assert app.progression_suggestion([{"day": "d", "weight": 15, "reps": 12, "deload": False}], "10–12")["change"] == 2.5
+
+
+def test_readiness_uses_previous_night_until_today_syncs():
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    result = app.deterministic_training_recommendation(
+        [{"id": "s", "date": date.today().isoformat(), "title": "Lift", "kind": "strength", "minutes": 60, "status": "planned", "locked": False}],
+        [{"calendar_date": date.today().isoformat(), "sleep_seconds": None, "hrv_ms": None},
+         {"calendar_date": yesterday, "sleep_seconds": 5.5 * 3600, "hrv_ms": 50, "hrv_status": "LOW", "body_battery_at_wake": 20}],
+        None, recent_training_days=3,
+    )
+    assert result["data_is_stale"] and result["data_date"] == yesterday
+    assert result["score"] == 100 - 30 - 15 - 12 - 5
+    assert any("hasn't synced" in reason for reason in result["reasons"])
+
+
+def test_build_phase_adds_sets_to_main_lifts():
+    lines = ["Barbell Bench Press — 3 × 4–6", "Incline Dumbbell Press — 3 × 6–8", "Pec Dec Fly — 3 × 8–10"]
+    assert app.phase_lines(lines, "Build") == ["Barbell Bench Press — 4 × 4–6", "Incline Dumbbell Press — 4 × 6–8", "Pec Dec Fly — 3 × 8–10"]
+    assert app.phase_lines(lines, "Deload")[0] == "Barbell Bench Press — 2 × 4–6"
 
 
 def test_exercise_aliases_use_logged_names():
