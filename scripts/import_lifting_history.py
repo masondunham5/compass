@@ -54,12 +54,17 @@ def read_workouts(path: Path) -> list[dict[str, Any]]:
             if not day or not exercise or weight is None or reps is None:
                 print(f"  skipped line {line}: missing date, exercise, weight, or reps")
                 continue
+            note = _clean_note(row.get("notes") or "")
+            if "per side" in note.lower():
+                # Log weights as the total on the bar, like the other entries: both sides plus a 45 lb bar.
+                note = f"entered as {weight:g} per side; total = 2×{weight:g} + 45 bar"
+                weight = weight * 2 + 45
             workout = by_date.setdefault(day, {"date": day, "names": Counter(), "exercises": OrderedDict(), "approximate": False})
             workout["names"][(row.get("workout") or "Workout").strip()] += 1
             workout["approximate"] |= "approximate" in (row.get("notes") or "").lower()
             workout["exercises"].setdefault(exercise, []).append({
                 "set_number": int(_num(row.get("set") or "") or len(workout["exercises"].get(exercise, [])) + 1),
-                "weight": weight, "reps": int(reps), "rpe": _num(row.get("rpe") or ""), "note": _clean_note(row.get("notes") or ""),
+                "weight": weight, "reps": int(reps), "rpe": _num(row.get("rpe") or ""), "note": note,
             })
     workouts = []
     for workout in by_date.values():

@@ -290,6 +290,9 @@ button.row-item:hover { background: var(--surface-2); }
 }
 .rest-bar .timer { display: flex; align-items: baseline; gap: 10px; border: 0; background: none; color: var(--text); padding: 0; }
 .rest-bar .timer b { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+.rest-bar.done { border-color: var(--green); }
+.rest-bar.done .timer b { color: var(--green); }
+.progression-up { color: var(--green); font-weight: 650; }
 .rest-bar .timer span { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
 .rest-bar .btn { min-height: 44px; font-size: 1rem; }
 .run-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -360,6 +363,37 @@ button.row-item:hover { background: var(--surface-2); }
 .race-week li span:last-child { color: var(--muted); white-space: nowrap; }
 .race-preview { display: grid; gap: 10px; padding: 14px; border-radius: 14px; background: var(--surface-2); }
 .race-preview p { color: var(--muted); }
+
+/* ---------- Weekly review, settings, race tracking ---------- */
+.week-nav { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .88rem; }
+.icon-btn.small { width: 32px; height: 32px; }
+.icon-btn.small svg { width: 18px; height: 18px; }
+.icon-btn:disabled { opacity: .35; cursor: default; }
+.review-card { display: grid; gap: 16px; }
+.review-card h3 { font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.group-bars { display: grid; gap: 6px; }
+.group-bars div { display: grid; grid-template-columns: 90px 1fr 30px; gap: 10px; align-items: center; font-size: .9rem; }
+.group-bars i { display: block; height: 8px; border-radius: 99px; background: var(--accent); }
+.group-bars b { text-align: right; font-variant-numeric: tabular-nums; }
+.review-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.review-stats div { padding: 10px; border-radius: 12px; background: var(--surface-2); }
+.review-stats span { display: block; color: var(--muted); font-size: .78rem; }
+.review-stats b { font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.review-stats small { display: block; color: var(--faint); font-size: .75rem; }
+.review-stats .up { color: var(--green); }
+.review-stats .down { color: var(--amber); }
+.record-list { margin: 0; padding: 0; list-style: none; }
+.record-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: .92rem; }
+.record-list li:first-child { border-top: 0; }
+.record-list li span:last-child { color: var(--green); white-space: nowrap; }
+.inline-form { display: flex; gap: 8px; }
+.inline-form input { flex: 1; }
+.advice { padding: 12px 14px; border-radius: 14px; background: var(--amber-bg); color: var(--amber); }
+.vs-chart { display: flex; align-items: flex-end; gap: 6px; height: 70px; }
+.vs-chart div { flex: 1; display: flex; align-items: flex-end; gap: 2px; height: 100%; }
+.vs-chart i { flex: 1; border-radius: 3px 3px 1px 1px; }
+.vs-chart .planned { background: var(--stage-light); }
+.vs-chart .actual { background: var(--green); }
 
 /* ---------- Tab bar ---------- */
 .tabbar {

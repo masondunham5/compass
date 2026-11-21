@@ -190,6 +190,20 @@ def cap_sets(line: str, cap: int) -> str:
     return re.sub(r"(\d+)(\s*[×x]\s*)", lambda m: f"{min(int(m.group(1)), cap)}{m.group(2)}", line, count=1)
 
 
+def add_set(line: str, maximum: int = 4) -> str:
+    return re.sub(r"(\d+)(\s*[×x]\s*)", lambda m: f"{min(int(m.group(1)) + 1, max(maximum, int(m.group(1))))}{m.group(2)}", line, count=1)
+
+
+def phase_lines(lines: list[str], phase: str) -> list[str]:
+    """Volume across the block: Deload caps every lift at 2 sets; Build adds a set to the
+    first two (main) lifts; Re-entry and Foundation use the template as written."""
+    if phase == "Deload":
+        return [cap_sets(line, 2) for line in lines]
+    if phase == "Build":
+        return [add_set(line) if index < 2 else line for index, line in enumerate(lines)]
+    return list(lines)
+
+
 def strength_workouts(split: str, avoid: str) -> list[tuple[str, list[str]]]:
     lower_single_leg = "Leg Press — 3 × 10–12" if "bulgarian" in avoid.lower() else "Bulgarian Split Squat — 3 × 8–10"
     body_part = [
@@ -259,9 +273,29 @@ def build_draft(request: BlockDraftRequest) -> dict[str, Any]:
                 target_miles = max(1.5, initial * run_multiplier)
                 session_description = f"{phase}: easy effort · target {target_miles:.1f} mi"
                 minutes = max(25, int(target_miles * 11))
-            lines = [cap_sets(line, 2) for line in workout] if kind == "strength" and phase == "Deload" else list(workout)
+            lines = phase_lines(workout, phase) if kind == "strength" else list(workout)
             sessions.append({"id": f"block-{uuid4().hex[:12]}", "date": scheduled.isoformat(), "kind": kind, "title": session_title, "minutes": minutes, "description": session_description, "workout": lines, "status": "planned", "locked": False})
     return {"id": f"plan-{uuid4().hex[:12]}", "name": request.name, "start_date": start.isoformat(), "goals": request.goals, "config": request.model_dump(), "phases": phases, "sessions": sessions}
+
+
+BACKUP_DIR = ROOT / "backups"
+
+
+def auto_backup(min_hours: float = 20, keep: int = 14) -> Path | None:
+    """Daily safety copy: snapshot the database if the newest automatic backup is older than
+    `min_hours`, and keep only the newest `keep` automatic ones. Manual backups are never pruned."""
+    if not DATABASE.exists():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    existing = sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))
+    if existing and (datetime.now().timestamp() - existing[-1].stat().st_mtime) < min_hours * 3600:
+        return None
+    destination = BACKUP_DIR / f"auto_health_hub_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+    with sqlite3.connect(DATABASE) as source, sqlite3.connect(destination) as target:
+        source.backup(target)
+    for old in sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))[:-keep]:
+        old.unlink(missing_ok=True)
+    return destination
 
 
 def connection() -> sqlite3.Connection:
@@ -362,6 +396,10 @@ def initialize() -> None:
                 body_battery INTEGER,
                 source_json TEXT NOT NULL DEFAULT '{}',
                 synced_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS races (
                 id TEXT PRIMARY KEY,
@@ -471,9 +509,8 @@ def retemplate_future_strength(db: sqlite3.Connection, plan_id: str) -> int:
         if not title:
             continue
         week = re.match(r"^(W\d+)\s*·", session["title"] or "")
-        lines = ROUTINE_DAYS[title]
-        if (session["description"] or "").startswith("Deload"):
-            lines = [cap_sets(line, 2) for line in lines]
+        phase = (session["description"] or "").split(":", 1)[0].strip()
+        lines = phase_lines(ROUTINE_DAYS[title], phase)
         db.execute("UPDATE sessions SET title = ?, workout_json = ? WHERE id = ?",
                    (f"{week.group(1)} · {title}" if week else title, json.dumps(lines), session["id"]))
         changed += 1
@@ -528,6 +565,91 @@ def exercise_name_from_session(session: dict[str, Any], exercise_index: int) -> 
     return workout[exercise_index].partition("—")[0].strip()
 
 
+# Lifts where the logged weight is *added* to bodyweight (0 = bodyweight only).
+BODYWEIGHT_EXERCISES = {"pull-up", "chin-up", "weighted dips", "dips", "push-up"}
+
+
+def is_bodyweight(name: str) -> bool:
+    return canonical_exercise(name).lower() in BODYWEIGHT_EXERCISES
+
+
+def estimate_1rm(name: str, weight: float, reps: int, bodyweight: float | None = None) -> float:
+    """Epley estimate; bodyweight lifts count bodyweight + added load when bodyweight is known."""
+    load = weight + (bodyweight or 0) if is_bodyweight(name) else weight
+    return round(load * (1 + reps / 30), 1) if reps and load else 0.0
+
+
+def get_setting(db: sqlite3.Connection, key: str) -> str | None:
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def current_bodyweight(db: sqlite3.Connection) -> float | None:
+    """Latest check-in weight, falling back to the bodyweight saved in Settings."""
+    row = db.execute("SELECT weight_lbs FROM daily_health WHERE weight_lbs IS NOT NULL ORDER BY checkin_date DESC LIMIT 1").fetchone()
+    if row:
+        return float(row[0])
+    saved = get_setting(db, "bodyweight_lbs")
+    return float(saved) if saved else None
+
+
+def rest_seconds(name: str, target_reps: str) -> int:
+    """Rest between sets: heavy compounds 3 min, other compounds 2.5 min, isolation 90 s, core 60 s."""
+    from catalog import EXERCISES
+    kinds = {exercise.lower(): kind for exercise, _, _, kind in EXERCISES}
+    kind = kinds.get(canonical_exercise(name).lower())
+    if kind == "core":
+        return 60
+    if kind == "isolation":
+        return 90
+    if kind == "compound":
+        return 180 if rep_bounds(target_reps)[1] <= 6 else 150
+    return 120
+
+
+def rep_bounds(target_reps: str) -> tuple[int, int]:
+    numbers = [int(n) for n in re.findall(r"\d+", target_reps or "")]
+    return (numbers[0], numbers[-1]) if numbers else (8, 12)
+
+
+def weight_step(weight: float) -> float:
+    return 5.0 if weight >= 50 else 2.5
+
+
+def progression_suggestion(history: list[dict[str, Any]], target_reps: str) -> dict[str, Any] | None:
+    """Double progression from the most recent full (non-deload) session of this exercise.
+
+    Work at the heaviest weight used last time. If every set there reached the top of the
+    rep range, add a small step; if any fell below the bottom, hold (or drop a step if
+    well short); otherwise keep the weight and aim for more reps.
+    """
+    if not history:
+        return None
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in history:
+        by_day.setdefault(row["day"], []).append(row)
+    days = sorted(by_day, reverse=True)
+    latest = days[0]
+    is_deload = lambda day: any(r.get("deload") for r in by_day[day])
+    source_day = next((day for day in days if not is_deload(day)), latest)
+    sets = by_day[source_day]
+    top = max(row["weight"] for row in sets)
+    reps_at_top = [row["reps"] for row in sets if row["weight"] == top]
+    low, high = rep_bounds(target_reps)
+    last = f"{top:g} × {', '.join(str(r) for r in reps_at_top)}"
+    prefix = "Back from deload. " if is_deload(latest) and source_day != latest else ""
+    if top <= 0:  # bodyweight-only: progress reps
+        return {"weight": 0, "reps": min(high, max(reps_at_top) + 1), "change": 0, "note": f"{prefix}Bodyweight last time ({', '.join(map(str, reps_at_top))} reps). Add a rep or some weight."}
+    step = weight_step(top)
+    if all(r >= high for r in reps_at_top):
+        return {"weight": top + step, "reps": low, "change": step, "note": f"{prefix}Hit {high}+ reps on every set at {top:g} lb ({last}). Go up to {top + step:g} lb."}
+    if min(reps_at_top) <= low - 3:
+        return {"weight": max(step, top - step), "reps": low, "change": -step, "note": f"{prefix}Well short of {low} reps at {top:g} lb ({last}). Drop to {max(step, top - step):g} lb and rebuild."}
+    if min(reps_at_top) < low:
+        return {"weight": top, "reps": low, "change": 0, "note": f"{prefix}Below {low} reps at {top:g} lb ({last}). Stay here and get every set to {low}."}
+    return {"weight": top, "reps": min(high, max(reps_at_top) + 1), "change": 0, "note": f"{prefix}Stay at {top:g} lb ({last}). Aim for {high} reps on every set, then add weight."}
+
+
 def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     """Turn stable workout outline lines into a usable in-gym set logger."""
     by_exercise: dict[int, list[dict[str, Any]]] = {}
@@ -538,16 +660,20 @@ def exercises_for(session: dict[str, Any], rows: list[sqlite3.Row], previous_row
         name, _, prescription = outline.partition("—")
         logged = sorted(by_exercise.get(index, []), key=lambda item: item["set_number"])
         same_exercise = [dict(row) for row in previous_rows if normalize_exercise(row["exercise_name"]) == normalize_exercise(name)]
-        # Top set (heaviest, then most reps) from the most recent day this exercise was done.
-        previous = max(same_exercise, key=lambda item: (item["completed_at"][:10], item["weight"], item["reps"])) if same_exercise else None
         target_sets, target_reps, starting_guide = prescription_details(prescription.strip() or "Working sets")
         target_weight = line_target_weight(prescription)
+        history = [{"day": row.get("session_date") or row["completed_at"][:10], "weight": row["weight"], "reps": row["reps"],
+                    "deload": "deload" in (row.get("note") or "").lower() or (row.get("session_description") or "").startswith("Deload")}
+                   for row in same_exercise]
+        suggestion = progression_suggestion(history, target_reps)
         exercises.append({
+            "rest_seconds": rest_seconds(name, target_reps),
             "index": index, "name": name.strip(), "prescription": prescription.strip() or "Working sets",
             "sets": logged, "target_sets": target_sets, "target_reps": target_reps, "target_weight": target_weight,
-            "suggested_weight": target_weight if target_weight is not None else (previous["weight"] if previous else None),
-            "suggested_reps": previous["reps"] if previous else None,
-            "starting_guide": starting_guide if not previous else f"Previous logged set: {previous['weight']:g} lb × {previous['reps']}. Start there, then adjust for RPE 7–8.",
+            "suggested_weight": target_weight if target_weight is not None else (suggestion["weight"] if suggestion else None),
+            "suggested_reps": suggestion["reps"] if suggestion else None,
+            "progression": suggestion,
+            "starting_guide": suggestion["note"] if suggestion else starting_guide,
         })
     return exercises
 
@@ -587,12 +713,23 @@ def mean_metric(rows: list[dict[str, Any]], key: str) -> float | None:
 
 def deterministic_training_recommendation(
     sessions: list[dict[str, Any]], daily_metrics: list[dict[str, Any]], manual_health: dict[str, Any] | None = None,
+    recent_training_days: int = 0,
 ) -> dict[str, Any]:
     """Explainable rule engine. It never writes, moves, or cancels a session."""
     today = date.today().isoformat()
-    # Yesterday's metrics are useful as baseline history, but never presented as today's recovery state.
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    has_night = lambda row: row and (row.get("sleep_seconds") is not None or row.get("hrv_ms") is not None)
+    # Garmin files last night's sleep under today's date. Until it syncs, fall back to the
+    # previous night (never older) and say so; anything older is only baseline history.
     current = next((row for row in daily_metrics if row.get("calendar_date") == today), None)
-    baseline_rows = [row for row in daily_metrics if row.get("calendar_date") != today][:28]
+    stale_note = None
+    if not has_night(current):
+        previous = next((row for row in daily_metrics if row.get("calendar_date") == yesterday), None)
+        if has_night(previous):
+            current = previous
+            stale_note = f"Today's sleep hasn't synced from Garmin yet, so this uses the previous night ({yesterday})."
+    used_date = current.get("calendar_date") if current else None
+    baseline_rows = [row for row in daily_metrics if row.get("calendar_date") not in {today, used_date}][:28]
     baseline_hrv = mean_metric(baseline_rows, "hrv_ms")
     baseline_rhr = mean_metric(baseline_rows, "resting_hr")
     score = 100
@@ -605,9 +742,26 @@ def deterministic_training_recommendation(
             score -= 30; reasons.append(f"Sleep was {sleep_hours:.1f}h (under the 6h recovery floor)."); headlines.append(slept)
         elif sleep_hours < 7:
             score -= 12; reasons.append(f"Sleep was {sleep_hours:.1f}h (below the 7h target)."); headlines.append(slept)
+        sleep_score = current.get("sleep_score")
+        if sleep_hours >= 6 and sleep_score is not None and float(sleep_score) < 50:
+            score -= 8; reasons.append(f"Garmin sleep score was {round(float(sleep_score))} (poor quality)."); headlines.append("Sleep quality was poor.")
+    hrv_flagged = False
     if current and baseline_hrv and current.get("hrv_ms") is not None and float(current["hrv_ms"]) <= baseline_hrv * 0.85:
         drop = round((1 - float(current["hrv_ms"]) / baseline_hrv) * 100)
         score -= 20; reasons.append(f"HRV is {drop}% below your rolling baseline."); headlines.append(f"HRV is {drop}% below baseline.")
+        hrv_flagged = True
+    hrv_status = str((current or {}).get("hrv_status") or "").upper()
+    if not hrv_flagged and hrv_status in {"LOW", "POOR"}:
+        score -= 15; reasons.append("Garmin HRV status is low."); headlines.append("HRV status is low.")
+    elif not hrv_flagged and hrv_status == "UNBALANCED":
+        score -= 8; reasons.append("Garmin HRV status is unbalanced."); headlines.append("HRV status is unbalanced.")
+    wake_battery = (current or {}).get("body_battery_at_wake")
+    if wake_battery is not None and float(wake_battery) < 25:
+        score -= 12; reasons.append(f"Body Battery was only {round(float(wake_battery))} at wake."); headlines.append(f"Body Battery woke at {round(float(wake_battery))}.")
+    elif wake_battery is not None and float(wake_battery) < 40:
+        score -= 6; reasons.append(f"Body Battery was {round(float(wake_battery))} at wake (below 40).")
+    if recent_training_days >= 3:
+        score -= 5; reasons.append("You trained each of the last 3 days."); headlines.append("Three training days in a row.")
     if current and baseline_rhr and current.get("resting_hr") is not None and float(current["resting_hr"]) >= baseline_rhr * 1.08:
         rise = round((float(current["resting_hr"]) / baseline_rhr - 1) * 100)
         score -= 15; reasons.append(f"Resting HR is {rise}% above your rolling baseline."); headlines.append(f"Resting HR is {rise}% above baseline.")
@@ -658,8 +812,13 @@ def deterministic_training_recommendation(
         action = "No session planned. An easy walk is plenty."
     if not reasons:
         reasons.append("No recovery flag crossed a conservative threshold; recommendation is based on the planned session.")
+    if stale_note:
+        reasons.insert(0, stale_note)
+    elif not current:
+        reasons.insert(0, "No Garmin sleep or HRV for last night yet; the score uses only your check-in.")
     return {
-        "engine": "deterministic-v1", "score": score, "mode": mode, "title": title, "guidance": guidance,
+        "engine": "deterministic-v2", "score": score, "mode": mode, "title": title, "guidance": guidance,
+        "data_date": used_date, "data_is_stale": bool(stale_note),
         "headline": " ".join([*headlines[:1], action]),
         "adjusted_sets": adjusted_sets, "adjusted_minutes": adjusted_minutes,
         "target_session": {"id": target["id"], "title": target["title"], "date": target.get("date"), "kind": target.get("kind"), "minutes": target.get("minutes"), "locked": bool(target.get("locked"))} if target else None,
@@ -808,6 +967,10 @@ def parse_xml_activity(content: bytes, source: str) -> list[dict[str, Any]]:
 @app.on_event("startup")
 def startup() -> None:
     initialize()
+    try:
+        auto_backup()
+    except (OSError, sqlite3.Error):
+        pass  # a failed backup must never stop the app from starting
 
 
 @app.get("/api/overview")
@@ -962,8 +1125,13 @@ def training_recommendation() -> dict[str, Any]:
             ((today - timedelta(days=28)).isoformat(),),
         ).fetchall()
         manual = db.execute("SELECT * FROM daily_health WHERE checkin_date = ?", (today.isoformat(),)).fetchone()
+        # Days (of the previous three) with a completed session or a Garmin activity.
+        window = ((today - timedelta(days=3)).isoformat(), (today - timedelta(days=1)).isoformat())
+        trained = {row[0] for row in db.execute("SELECT session_date FROM sessions WHERE status = 'completed' AND session_date BETWEEN ? AND ?", window)}
+        trained |= {row[0] for row in db.execute("SELECT activity_date FROM imported_activities WHERE activity_date BETWEEN ? AND ?", window)}
     return deterministic_training_recommendation(
-        [row_to_session(row) for row in session_rows], [dict(row) for row in metric_rows], dict(manual) if manual else None
+        [row_to_session(row) for row in session_rows], [dict(row) for row in metric_rows], dict(manual) if manual else None,
+        recent_training_days=len(trained),
     )
 
 
@@ -1165,35 +1333,55 @@ def match_garmin_activities(db: sqlite3.Connection) -> int:
         (today,),
     ).fetchall()
     matched = 0
-    for activity in rows:
-        kind = garmin_activity_kind(activity["activity_type"])
-        if not kind:
-            continue
+    # Pass 1 links same-day pairs for every activity; pass 2 lets leftovers take a planned
+    # session shifted by one day, so a shifted activity never steals another day's match.
+    leftovers = []
+    for shifted, candidates in ((False, rows), (True, leftovers)):
+        for activity in list(candidates):
+            matched += _link_activity(db, activity, shifted, leftovers)
+    return matched
+
+
+def _link_activity(db: sqlite3.Connection, activity: sqlite3.Row, shifted: bool, leftovers: list) -> int:
+    kind = garmin_activity_kind(activity["activity_type"])
+    if not kind:
+        return 0
+    if not shifted:
         session = db.execute(
             """SELECT * FROM sessions WHERE session_date = ? AND kind = ? AND status IN ('planned', 'completed')
                ORDER BY CASE status WHEN 'completed' THEN 0 ELSE 1 END, title LIMIT 1""",
             (activity["activity_date"], kind),
         ).fetchone()
         if not session:
-            continue
-        if session["status"] == "planned":
-            metrics: dict[str, Any] = {
-                "source": "Garmin (matched automatically)", "garmin_activity_id": activity["id"],
-                "duration_minutes": activity["duration_minutes"], "average_hr": activity["average_hr"], "max_hr": activity["max_hr"],
-            }
-            if kind == "run" and activity["distance_miles"]:
-                metrics["distance_miles"] = activity["distance_miles"]
-                if activity["duration_minutes"]:
-                    metrics["pace_seconds_per_mile"] = round(activity["duration_minutes"] * 60 / activity["distance_miles"])
-            db.execute("UPDATE sessions SET status = 'completed' WHERE id = ?", (session["id"],))
-            db.execute(
-                "INSERT INTO logs (session_id, completed_at, minutes, notes, metrics_json) VALUES (?, ?, ?, ?, ?)",
-                (session["id"], datetime.now().astimezone().isoformat(timespec="seconds"), round(activity["duration_minutes"] or session["minutes"]),
-                 "Completed from a Garmin activity on the same day.", json.dumps(metrics)),
-            )
-        db.execute("UPDATE imported_activities SET linked_session_id = ? WHERE id = ?", (session["id"], activity["id"]))
-        matched += 1
-    return matched
+            leftovers.append(activity)
+            return 0
+    else:
+        day = date.fromisoformat(activity["activity_date"])
+        session = db.execute(
+            """SELECT * FROM sessions s WHERE kind = ? AND status = 'planned' AND session_date IN (?, ?)
+               AND NOT EXISTS (SELECT 1 FROM imported_activities a WHERE a.linked_session_id = s.id)
+               ORDER BY session_date, title LIMIT 1""",
+            (kind, (day - timedelta(days=1)).isoformat(), (day + timedelta(days=1)).isoformat()),
+        ).fetchone()
+        if not session:
+            return 0
+    if session["status"] == "planned":
+        metrics: dict[str, Any] = {
+            "source": "Garmin (matched automatically)", "garmin_activity_id": activity["id"],
+            "duration_minutes": activity["duration_minutes"], "average_hr": activity["average_hr"], "max_hr": activity["max_hr"],
+        }
+        if kind == "run" and activity["distance_miles"]:
+            metrics["distance_miles"] = activity["distance_miles"]
+            if activity["duration_minutes"]:
+                metrics["pace_seconds_per_mile"] = round(activity["duration_minutes"] * 60 / activity["distance_miles"])
+        note = f"Completed from a Garmin activity on {activity['activity_date']}." if shifted else "Completed from a Garmin activity on the same day."
+        db.execute("UPDATE sessions SET status = 'completed' WHERE id = ?", (session["id"],))
+        db.execute(
+            "INSERT INTO logs (session_id, completed_at, minutes, notes, metrics_json) VALUES (?, ?, ?, ?, ?)",
+            (session["id"], datetime.now().astimezone().isoformat(timespec="seconds"), round(activity["duration_minutes"] or session["minutes"]), note, json.dumps(metrics)),
+        )
+    db.execute("UPDATE imported_activities SET linked_session_id = ? WHERE id = ?", (session["id"], activity["id"]))
+    return 1
 
 
 @app.post("/api/activities/{activity_id}/link")
@@ -1325,9 +1513,9 @@ def session_detail(session_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Training session not found.")
         set_rows = db.execute("SELECT * FROM set_logs WHERE session_id = ? ORDER BY exercise_index, set_number", (session_id,)).fetchall()
         history_rows = db.execute(
-            """SELECT sl.*, s.workout_json FROM set_logs sl
+            """SELECT sl.*, s.workout_json, s.session_date, s.description AS session_description FROM set_logs sl
                JOIN sessions s ON s.id = sl.session_id
-               WHERE sl.session_id != ? ORDER BY sl.completed_at DESC""", (session_id,)
+               WHERE sl.session_id != ? AND s.session_date <= ? ORDER BY sl.completed_at DESC""", (session_id, row["session_date"])
         ).fetchall()
     session = row_to_session(row)
     previous_rows = []
@@ -1458,6 +1646,7 @@ def progress() -> dict[str, Any]:
                FROM set_logs sl JOIN sessions s ON s.id = sl.session_id
                ORDER BY s.session_date, sl.completed_at"""
         ).fetchall()
+        bodyweight = current_bodyweight(db)
     exercises: dict[str, dict[str, Any]] = {}
     for row in rows:
         workout = json.loads(row["workout_json"])
@@ -1465,9 +1654,9 @@ def progress() -> dict[str, Any]:
             continue
         name = canonical_exercise(workout[row["exercise_index"]].partition("—")[0])
         key = normalize_exercise(name)
-        estimated_1rm = round(row["weight"] * (1 + row["reps"] / 30), 1) if row["reps"] else 0
+        estimated_1rm = estimate_1rm(name, row["weight"], row["reps"], bodyweight)
         point = {"date": row["session_date"], "weight": row["weight"], "reps": row["reps"], "rpe": row["rpe"], "e1rm": estimated_1rm, "session": row["title"]}
-        item = exercises.setdefault(key, {"name": name, "history": []})
+        item = exercises.setdefault(key, {"name": name, "history": [], "bodyweight": is_bodyweight(name)})
         item["history"].append(point)
     result = []
     for item in exercises.values():
@@ -1476,7 +1665,96 @@ def progress() -> dict[str, Any]:
         item["best_set"] = best
         item["latest"] = history[-1]
         result.append(item)
-    return {"exercises": sorted(result, key=lambda item: item["name"].lower())}
+    return {"exercises": sorted(result, key=lambda item: item["name"].lower()), "bodyweight": bodyweight}
+
+
+@app.get("/api/settings")
+def get_settings() -> dict[str, Any]:
+    with connection() as db:
+        saved = get_setting(db, "bodyweight_lbs")
+        return {"bodyweight_lbs": float(saved) if saved else None, "effective_bodyweight": current_bodyweight(db)}
+
+
+class SettingsUpdate(BaseModel):
+    bodyweight_lbs: float | None = Field(default=None, ge=60, le=600)
+
+
+@app.put("/api/settings")
+def update_settings(payload: SettingsUpdate) -> dict[str, Any]:
+    with connection() as db:
+        if payload.bodyweight_lbs is None:
+            db.execute("DELETE FROM settings WHERE key = 'bodyweight_lbs'")
+        else:
+            db.execute("INSERT INTO settings (key, value) VALUES ('bodyweight_lbs', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(payload.bodyweight_lbs),))
+    return get_settings()
+
+
+def _week_metrics(db: sqlite3.Connection, start: date, end: date) -> dict[str, Any]:
+    row = db.execute(
+        "SELECT AVG(sleep_seconds) / 3600.0, AVG(hrv_ms), AVG(resting_hr), AVG(sleep_score) FROM garmin_daily_metrics WHERE calendar_date BETWEEN ? AND ?",
+        (start.isoformat(), end.isoformat()),
+    ).fetchone()
+    return {key: (round(value, 1) if value is not None else None) for key, value in zip(["sleep_hours", "hrv", "resting_hr", "sleep_score"], row)}
+
+
+@app.get("/api/review/week")
+def weekly_review(offset: int = 0) -> dict[str, Any]:
+    """One week (Mon–Sun) at a glance. offset=0 is this week, -1 last week, and so on."""
+    from catalog import EXERCISES, guess_group
+    groups = {name.lower(): group for name, group, _, _ in EXERCISES}
+    today = date.today()
+    start = today - timedelta(days=today.weekday()) + timedelta(weeks=min(0, offset))
+    end = start + timedelta(days=6)
+    with connection() as db:
+        rows = db.execute(
+            """SELECT sl.exercise_index, sl.weight, sl.reps, s.session_date, s.workout_json, s.id
+               FROM set_logs sl JOIN sessions s ON s.id = sl.session_id WHERE s.session_date <= ?""",
+            (end.isoformat(),),
+        ).fetchall()
+        sessions_done = db.execute(
+            "SELECT kind, COUNT(*) FROM sessions WHERE status = 'completed' AND session_date BETWEEN ? AND ? GROUP BY kind", (start.isoformat(), end.isoformat())
+        ).fetchall()
+        planned_runs = db.execute(
+            "SELECT description FROM sessions WHERE kind = 'run' AND status != 'cancelled' AND session_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat())
+        ).fetchall()
+        runs = db.execute(
+            "SELECT distance_miles FROM imported_activities WHERE lower(activity_type) LIKE '%run%' AND activity_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat())
+        ).fetchall()
+        recovery = _week_metrics(db, start, end)
+        previous_recovery = _week_metrics(db, start - timedelta(days=7), start - timedelta(days=1))
+        bodyweight = current_bodyweight(db)
+    sets_by_group: dict[str, int] = {}
+    volume = 0.0
+    best_before: dict[str, float] = {}
+    best_this_week: dict[str, tuple[float, float, int, str]] = {}
+    for row in rows:
+        workout = json.loads(row["workout_json"] or "[]")
+        if row["exercise_index"] >= len(workout):
+            continue
+        name = canonical_exercise(workout[row["exercise_index"]].partition("—")[0])
+        e1rm = estimate_1rm(name, row["weight"], row["reps"], bodyweight)
+        if row["session_date"] < start.isoformat():
+            best_before[name] = max(best_before.get(name, 0), e1rm)
+            continue
+        group = groups.get(name.lower()) or guess_group(name)
+        sets_by_group[group] = sets_by_group.get(group, 0) + 1
+        volume += row["weight"] * row["reps"]
+        if e1rm > best_this_week.get(name, (0,))[0]:
+            best_this_week[name] = (e1rm, row["weight"], row["reps"], row["session_date"])
+    records = [
+        {"name": name, "e1rm": round(best[0], 1), "weight": best[1], "reps": best[2], "date": best[3], "previous": round(best_before[name], 1)}
+        for name, best in best_this_week.items() if name in best_before and best[0] > best_before[name] + 0.05
+    ]
+    planned_miles = sum(float(m.group(1)) for desc in planned_runs if (m := re.search(r"([\d.]+)\s*mi\b", desc["description"] or "")))
+    run_miles = [row["distance_miles"] or 0 for row in runs]
+    return {
+        "start": start.isoformat(), "end": end.isoformat(), "offset": min(0, offset),
+        "lifting": {"sets_by_group": dict(sorted(sets_by_group.items(), key=lambda item: -item[1])), "total_sets": sum(sets_by_group.values()),
+                    "volume": round(volume), "records": sorted(records, key=lambda r: -(r["e1rm"] - r["previous"]))},
+        "sessions": {kind: count for kind, count in sessions_done},
+        "running": {"miles": round(sum(run_miles), 1), "planned": round(planned_miles, 1), "runs": len(run_miles), "longest": round(max(run_miles, default=0), 1)},
+        "recovery": recovery, "previous_recovery": previous_recovery,
+    }
 
 
 @app.post("/api/checkins")
@@ -1694,15 +1972,56 @@ def _build_race(payload: RaceRequest) -> tuple[dict[str, Any], int | None]:
     return plan, goal
 
 
+def actual_run_miles(start: date, end: date) -> float:
+    with connection() as db:
+        total = db.execute(
+            "SELECT COALESCE(SUM(distance_miles), 0) FROM imported_activities WHERE activity_date BETWEEN ? AND ? AND lower(activity_type) LIKE '%run%'",
+            (start.isoformat(), end.isoformat()),
+        ).fetchone()[0]
+    return round(total, 1)
+
+
 def race_payload(row: sqlite3.Row) -> dict[str, Any]:
     plan = json.loads(row["plan_json"] or "{}")
     today = date.today()
     current = next((week for week in plan.get("weeks", []) if date.fromisoformat(week["start"]) <= today < date.fromisoformat(week["start"]) + timedelta(days=7)), None)
+    # Planned vs actual (Garmin) for finished weeks, most recent last.
+    history = []
+    for week in plan.get("weeks", []):
+        start = date.fromisoformat(week["start"])
+        if start + timedelta(days=6) >= today:
+            break
+        history.append({"index": week["index"], "start": week["start"], "phase": week["phase"], "planned": week["miles"], "actual": actual_run_miles(start, start + timedelta(days=6))})
+    recent = history[-2:]
+    advice = None
+    if recent:
+        planned = sum(week["planned"] for week in recent)
+        actual = sum(week["actual"] for week in recent)
+        if planned and actual < planned * 0.7:
+            advice = f"You ran {actual:g} of {planned:g} planned miles over the last {len(recent)} week{'s' if len(recent) > 1 else ''}. Recalibrate to rebuild from where you are instead of catching up."
+        elif planned and actual > planned * 1.3:
+            advice = f"You ran {actual:g} miles against {planned:g} planned over the last {len(recent)} week{'s' if len(recent) > 1 else ''}. Recalibrate if that's your new normal."
     return {
         "id": row["id"], "name": row["name"], "race_date": row["race_date"], "distance": row["distance"],
         "settings": json.loads(row["settings_json"] or "{}"), "applied_at": row["applied_at"],
         "days_to_go": (date.fromisoformat(row["race_date"]) - today).days, "current_week": current, "plan": plan,
+        "history": history[-8:], "advice": advice,
     }
+
+
+@app.post("/api/races/{race_id}/recalibrate")
+def recalibrate_race(race_id: str) -> dict[str, Any]:
+    """Rebuild the remaining weeks from your actual recent mileage (last 2 weeks of Garmin runs)."""
+    with connection() as db:
+        row = db.execute("SELECT * FROM races WHERE id = ?", (race_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Race not found.")
+    settings = json.loads(row["settings_json"] or "{}")
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    recent = actual_run_miles(monday - timedelta(days=14), monday - timedelta(days=1)) / 2
+    settings["current_weekly_miles"] = round(recent, 1)
+    return update_race(race_id, RaceRequest(**settings))
 
 
 @app.get("/api/races")

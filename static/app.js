@@ -74,7 +74,7 @@ const TAB_FOR_VIEW = { today: "today", recovery: "recovery", train: "train", wor
 function selectView(view) {
   $$(".view").forEach(element => element.classList.toggle("active", element.id === `view-${view}`));
   $$(".tabbar [data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === TAB_FOR_VIEW[view]));
-  if (view !== "workout") state.returnView = view;
+  if (view !== "workout") { state.returnView = view; holdScreenAwake(false); }
   window.scrollTo({ top: 0 });
 }
 
@@ -457,10 +457,41 @@ function openSessionSheet(session) {
 
 /* ---------------------------------------------------------------- Workout */
 
+// Rest timer counts down to a fixed end time, so it stays right even if the phone throttles the page.
+let timerEnd = 0;
+let lastRest = 90;
+let wakeLock = null;
 function formatTimer() { return `${String(Math.floor(timerSeconds / 60)).padStart(2, "0")}:${String(timerSeconds % 60).padStart(2, "0")}`; }
 function stopTimer() { clearInterval(timerId); timerId = null; }
 function updateTimer() { const output = $("#rest-clock"); if (output) output.textContent = formatTimer(); }
-function startTimer() { stopTimer(); timerSeconds = 90; updateTimer(); timerId = setInterval(() => { timerSeconds -= 1; updateTimer(); if (timerSeconds <= 0) stopTimer(); }, 1000); }
+function startTimer(seconds = lastRest) {
+  stopTimer(); lastRest = seconds; timerEnd = Date.now() + seconds * 1000;
+  $(".rest-bar")?.classList.remove("done");
+  const tick = () => {
+    timerSeconds = Math.max(0, Math.ceil((timerEnd - Date.now()) / 1000));
+    updateTimer();
+    if (timerSeconds <= 0) { stopTimer(); restFinished(); }
+  };
+  tick(); timerId = setInterval(tick, 250);
+}
+function restFinished() {
+  navigator.vibrate?.([250, 120, 250]);
+  try {
+    const audio = new (window.AudioContext || window.webkitAudioContext)();
+    const tone = audio.createOscillator(); const gain = audio.createGain();
+    tone.frequency.value = 880; gain.gain.value = 0.15; tone.connect(gain).connect(audio.destination);
+    tone.start(); tone.stop(audio.currentTime + 0.25); tone.onended = () => audio.close();
+  } catch { /* sound is optional */ }
+  $(".rest-bar")?.classList.add("done");
+}
+// Keep the screen on during a workout where the browser supports it.
+async function holdScreenAwake(on) {
+  try {
+    if (on && !wakeLock && "wakeLock" in navigator) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); }
+    if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch { wakeLock = null; }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && $("#view-workout").classList.contains("active")) holdScreenAwake(true); });
 
 function setRow(exercise, setNumber, logged) {
   const weight = logged?.weight ?? exercise.suggested_weight ?? "";
@@ -513,9 +544,12 @@ async function openSession(sessionId, options = {}) {
   const exercises = session.exercises.map(exercise => {
     const loggedCount = Math.max(0, ...(exercise.sets || []).map(set => set.set_number));
     const count = Math.max(options.cap ? Math.min(exercise.target_sets, options.cap) : exercise.target_sets, loggedCount);
-    const last = exercise.target_weight ? `<span class="target-chip">Target ${exercise.target_weight} lb</span>` : exercise.suggested_weight ? `Last ${exercise.suggested_weight} × ${exercise.suggested_reps}` : "No baseline";
+    const p = exercise.progression;
+    const last = exercise.target_weight ? `<span class="target-chip">Target ${exercise.target_weight} lb</span>`
+      : p ? `<span class="${p.change > 0 ? "progression-up" : ""}">Next ${p.weight ? `${p.weight} × ` : "BW × "}${p.reps}${p.change > 0 ? ` (+${p.change})` : p.change < 0 ? ` (${p.change})` : ""}</span>`
+      : "No baseline";
     const tools = done ? "" : `<div class="exercise-tools"><button type="button" data-tool="add-set">+ Set</button><button type="button" data-tool="edit">Edit</button><button type="button" data-tool="swap">Swap</button><button type="button" data-tool="remove" class="danger">Remove</button></div>`;
-    return `<article class="card exercise" data-index="${exercise.index}"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · ${esc(exercise.starting_guide)}</p></div><span class="last">${last}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div>${tools}</article>`;
+    return `<article class="card exercise" data-index="${exercise.index}"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · rest ${Math.floor((exercise.rest_seconds || 90) / 60)}:${String((exercise.rest_seconds || 90) % 60).padStart(2, "0")} · ${esc(exercise.starting_guide)}</p></div><span class="last">${last}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div>${tools}</article>`;
   }).join("");
   const addButton = done ? "" : `<button class="btn btn-ghost full add-exercise" type="button" id="add-exercise">${icon("plus")}Add exercise</button>`;
   target.innerHTML = `${header}<div class="workout-progress"><i></i></div>${exercises}${addButton}<div class="rest-bar"><button class="timer" type="button" id="timer-toggle"><b id="rest-clock">01:30</b><span>Rest</span></button>${done ? "" : '<button class="btn btn-primary" type="button" id="finish-session">Finish workout</button>'}</div>`;
@@ -528,13 +562,17 @@ async function openSession(sessionId, options = {}) {
     card.querySelectorAll("[data-tool]").forEach(button => button.onclick = () => exerciseTool(button.dataset.tool, exercise));
   });
   $("#timer-toggle").onclick = () => (timerId ? stopTimer() : startTimer());
+  if (!done) holdScreenAwake(true);
+  const firstRest = session.exercises[0]?.rest_seconds;
+  if (firstRest && !timerId) { lastRest = firstRest; timerSeconds = firstRest; updateTimer(); }
   target.querySelectorAll(".set-row").forEach(row => {
     const inputs = row.querySelectorAll("input");
     row.querySelector(".add-weight").onclick = () => { inputs[0].value = Number(inputs[0].value || 0) + 5; };
     row.querySelector(".set-check").onclick = async () => {
       await api(`/api/sessions/${encodeURIComponent(session.id)}/sets`, { method: "PUT", body: JSON.stringify({ exercise_index: Number(row.dataset.exerciseIndex), set_number: Number(row.dataset.setNumber), weight: Number(inputs[0].value), reps: Number(inputs[1].value), rpe: inputs[2].value ? Number(inputs[2].value) : null, note: "" }) });
       const check = row.querySelector(".set-check"); check.classList.add("logged"); check.textContent = "✓";
-      updateWorkoutProgress(); startTimer();
+      const rest = session.exercises.find(item => item.index === Number(row.dataset.exerciseIndex))?.rest_seconds;
+      updateWorkoutProgress(); startTimer(rest || lastRest);
     };
   });
   updateWorkoutProgress();
@@ -785,12 +823,22 @@ function openRaceSheet(race) {
   const currentIndex = Math.max(0, weeks.findIndex(week => week.runs.some(run => run.date >= todayIso)));
   $("#race-sheet-body").innerHTML = `<button class="sheet-close" type="button" aria-label="Close">${icon("close")}</button>
     <p class="kicker">${esc(race.plan.distance_label)} · ${esc(fmtLong(race.race_date))} · ${race.days_to_go} days</p><h2>${esc(race.name)}</h2>
+    ${race.advice ? `<div class="advice">${esc(race.advice)}</div>` : ""}
+    ${race.history?.length ? `<div><p class="kicker">Planned vs actual (Garmin) · last ${race.history.length} weeks</p><div class="vs-chart">${(() => {
+        const top = Math.max(1, ...race.history.flatMap(week => [week.planned, week.actual]));
+        return race.history.map(week => `<div title="Week ${week.index}: ${week.actual} of ${week.planned} mi"><i class="planned" style="height:${(week.planned / top) * 100}%"></i><i class="actual" style="height:${Math.max(2, (week.actual / top) * 100)}%"></i></div>`).join("");
+      })()}</div><p class="faint">Purple: planned · green: actual</p></div>` : ""}
     ${planSummaryHtml(race.plan)}
     ${raceWeekHtml(weeks[currentIndex], currentIndex === 0 && weeks[0].start > todayIso ? "First week" : "This week")}
     ${raceWeekHtml(weeks[currentIndex + 1], "Next week")}
     <p class="note">${race.applied_at ? "This plan is on your calendar. Editing it updates future runs." : "Not on your calendar yet. Adding it replaces the block's planned runs through race day; completed and locked runs stay."}</p>
     ${race.applied_at ? "" : `<button class="btn btn-primary full" type="button" id="race-apply">Add runs to calendar</button>`}
-    <div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-edit">Edit plan</button><button class="btn btn-danger" type="button" id="race-delete">Delete</button></div>`;
+    <div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-recalibrate" title="Rebuild the remaining weeks from your last two weeks of actual mileage">Recalibrate</button><button class="btn btn-ghost" type="button" id="race-edit">Edit plan</button><button class="btn btn-danger" type="button" id="race-delete">Delete</button></div>`;
+  $("#race-recalibrate").onclick = async () => {
+    if (!confirm("Rebuild the remaining weeks from your actual mileage over the last two weeks? Race date and goal stay the same.")) return;
+    try { await api(`/api/races/${encodeURIComponent(race.id)}/recalibrate`, { method: "POST" }); sheet.close(); await load(); openRaceSheet(state.races.races.find(item => item.id === race.id)); }
+    catch (error) { alert(error.message); }
+  };
   sheet.querySelector(".sheet-close").onclick = () => sheet.close();
   const apply = $("#race-apply");
   if (apply) apply.onclick = async () => {
@@ -866,9 +914,14 @@ function renderProgress() {
   $("#progress-stats").innerHTML = [[completed, "Sessions"], [volume >= 10000 ? `${Math.round(volume / 1000).toLocaleString()}k` : Math.round(volume).toLocaleString(), "Volume lb"], [exercises.length, "Lifts tracked"]]
     .map(([value, label]) => `<div class="stat"><b>${esc(value)}</b><span>${label}</span></div>`).join("");
   $("#progress-list").innerHTML = exercises.length
-    ? exercises.map((exercise, index) => `<button type="button" class="row-item" data-exercise="${index}"><div class="grow"><b>${esc(exercise.name)}</b><small>Best ${exercise.best_set.weight} lb × ${exercise.best_set.reps} · ${exercise.history.length} sets</small></div><span class="end">${exercise.best_set.e1rm.toFixed(0)} lb</span>${icon("chevron")}</button>`).join("")
+    ? exercises.map((exercise, index) => {
+        const load = exercise.bodyweight ? `BW${exercise.best_set.weight ? `+${exercise.best_set.weight}` : ""}` : `${exercise.best_set.weight} lb`;
+        const e1rm = exercise.best_set.e1rm ? `${exercise.best_set.e1rm.toFixed(0)} lb` : exercise.bodyweight ? "set BW" : "—";
+        return `<button type="button" class="row-item" data-exercise="${index}"><div class="grow"><b>${esc(exercise.name)}</b><small>Best ${load} × ${exercise.best_set.reps} · ${exercise.history.length} sets</small></div><span class="end">${e1rm}</span>${icon("chevron")}</button>`;
+      }).join("")
     : `<div class="empty"><b>Progress starts with your first logged set</b>Log working sets during a workout and each lift's estimated 1RM is tracked here.</div>`;
   $$("#progress-list [data-exercise]").forEach(button => button.onclick = () => openExerciseSheet(exercises[Number(button.dataset.exercise)]));
+  renderReview().catch(() => { $("#review-card").innerHTML = '<p class="muted">Weekly review is unavailable.</p>'; });
 }
 
 function openExerciseSheet(exercise) {
@@ -891,7 +944,42 @@ function openExerciseSheet(exercise) {
   openDialog(sheet);
 }
 
+let reviewOffset = 0;
+
+function compare(current, previous, unit = "", higherIsBetter = true) {
+  if (current == null) return "<small>No data</small>";
+  if (previous == null) return `<small>${unit}</small>`;
+  const diff = Math.round((current - previous) * 10) / 10;
+  if (!diff) return `<small>same as prior week</small>`;
+  const good = higherIsBetter ? diff > 0 : diff < 0;
+  return `<small class="${good ? "up" : "down"}">${diff > 0 ? "+" : ""}${diff}${unit} vs prior week</small>`;
+}
+
+async function renderReview(offset = reviewOffset) {
+  reviewOffset = Math.min(0, offset);
+  const r = await api(`/api/review/week?offset=${reviewOffset}`);
+  $("#review-range").textContent = reviewOffset === 0 ? "This week" : `${fmtShort(r.start).replace(/^\w+, /, "")} – ${fmtShort(r.end).replace(/^\w+, /, "")}`;
+  $("#review-next").disabled = reviewOffset === 0;
+  const groups = Object.entries(r.lifting.sets_by_group);
+  const maxSets = Math.max(1, ...groups.map(([, count]) => count));
+  const rec = r.recovery; const prev = r.previous_recovery;
+  $("#review-card").innerHTML = `
+    <div><h3>Sets by muscle group · ${r.lifting.total_sets} sets · ${Math.round(r.lifting.volume / 1000)}k lb</h3>${groups.length
+      ? `<div class="group-bars">${groups.map(([group, count]) => `<div><span>${esc(group)}</span><i style="width:${(count / maxSets) * 100}%"></i><b>${count}</b></div>`).join("")}</div>`
+      : `<p class="muted">No sets logged this week.</p>`}</div>
+    ${r.lifting.records.length ? `<div><h3>New records (estimated 1RM)</h3><ul class="record-list">${r.lifting.records.slice(0, 6).map(item => `<li><span>${esc(item.name)} · ${item.weight} × ${item.reps}</span><span>${item.e1rm} lb (+${(item.e1rm - item.previous).toFixed(1)})</span></li>`).join("")}</ul></div>` : ""}
+    <div><h3>Running</h3><div class="review-stats"><div><span>Miles</span><b>${r.running.miles}</b><small>${r.running.planned ? `${r.running.planned} planned` : "none planned"}</small></div><div><span>Runs</span><b>${r.running.runs}</b><small>longest ${r.running.longest} mi</small></div><div><span>Sessions done</span><b>${Object.values(r.sessions).reduce((a, b) => a + b, 0)}</b><small>${Object.entries(r.sessions).map(([kind, n]) => `${n} ${kind}`).join(" · ") || "—"}</small></div></div></div>
+    <div><h3>Recovery</h3><div class="review-stats"><div><span>Sleep</span><b>${rec.sleep_hours ?? "—"}${rec.sleep_hours != null ? " h" : ""}</b>${compare(rec.sleep_hours, prev.sleep_hours, " h")}</div><div><span>HRV</span><b>${rec.hrv ?? "—"}</b>${compare(rec.hrv, prev.hrv, " ms")}</div><div><span>Resting HR</span><b>${rec.resting_hr ?? "—"}</b>${compare(rec.resting_hr, prev.resting_hr, " bpm", false)}</div></div></div>`;
+}
+
+async function loadSettings() {
+  const settings = await api("/api/settings");
+  $("#settings-bodyweight").value = settings.bodyweight_lbs ?? "";
+  $("#settings-bodyweight").placeholder = settings.effective_bodyweight ? `${settings.effective_bodyweight} lb (from check-in)` : "lb";
+}
+
 function renderSettings() {
+  loadSettings().catch(() => {});
   const status = state.dashboard?.status || {};
   $("#garmin-settings-status").textContent = status.configured
     ? `Connected locally${status.expires_on ? ` · key expires ${status.expires_on}` : ""}${status.warning ? ` · ${status.warning}` : ""}`
@@ -1032,6 +1120,18 @@ $("#exercise-config-form").addEventListener("submit", submitExerciseConfig);
 $("#run-editor-form").addEventListener("submit", submitRunEditor);
 $("#run-edit-miles").addEventListener("input", () => renderRunEditor(true));
 $("#plan-race").onclick = () => openRaceDialog();
+$("#review-prev").onclick = () => renderReview(reviewOffset - 1);
+$("#review-next").onclick = () => renderReview(reviewOffset + 1);
+$("#settings-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const value = $("#settings-bodyweight").value;
+  const status = $("#settings-status");
+  try {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify({ bodyweight_lbs: value ? Number(value) : null }) });
+    status.textContent = value ? `Saved ${value} lb. Pull-ups and dips now include it.` : "Cleared."; status.hidden = false; status.classList.remove("error");
+    await load();
+  } catch (error) { status.textContent = error.message; status.hidden = false; status.classList.add("error"); }
+});
 $("#race-form").addEventListener("submit", saveRace);
 $("#race-preview-btn").onclick = previewRace;
 $("#plan-form").addEventListener("submit", submitPlanDraft);

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-20-ui7">
+    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui8">
     <title>Health Hub</title>
   </head>
   <body>
@@ -94,6 +94,8 @@
             <button class="icon-btn" type="button" data-view="settings" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
           </header>
           <div class="card stat-strip static" id="progress-stats"></div>
+          <div class="section-head"><h2 class="section-title">Week in review</h2><div class="week-nav"><button type="button" class="icon-btn small" id="review-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><span id="review-range"></span><button type="button" class="icon-btn small" id="review-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div></div>
+          <article class="card review-card" id="review-card"><p class="muted">Loading…</p></article>
           <h2 class="section-title">Lifts</h2>
           <article class="card list-card" id="progress-list"></article>
         </section>
@@ -105,6 +107,12 @@
             <h3>Garmin Personal API</h3>
             <p id="garmin-settings-status" class="muted">Checking Garmin status…</p>
             <p>Copy <code>.env.example</code> to <code>.env</code> on this computer, paste your key after <code>GARMIN_PERSONAL_API_KEY=</code>, add its expiration date, then sync. The key never appears in this page, the database, or GitHub.</p>
+          </article>
+          <article class="card prose-card">
+            <h3>Bodyweight</h3>
+            <p>Used for pull-ups and dips, so their estimated 1RM counts you plus any added weight. A weight from a daily check-in takes priority.</p>
+            <form id="settings-form" class="inline-form"><input id="settings-bodyweight" type="number" inputmode="decimal" min="60" max="600" step="any" placeholder="lb"><button class="btn btn-ghost" type="submit">Save</button></form>
+            <p class="note" id="settings-status" hidden></p>
           </article>
           <article class="card prose-card">
             <h3>Private by design</h3>
@@ -153,7 +161,7 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-20-ui7" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-21-ui8" onerror="window.__healthHubBootState='failed: script-error'"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;
