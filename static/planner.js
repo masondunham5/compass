@@ -2,7 +2,7 @@
    and Work schedule screens. Uses app.js / assistant.js helpers. */
 
 const plannerState = { plan: null };
-const KIND_LABEL = { study: "Study", review: "Review", workout: "Train" };
+const KIND_LABEL = { study: "Study", review: "Review", workout: "Train", task: "To-do", move: "Move" };
 
 async function renderWeekPlan(startIso) {
   const today = state.today.today;

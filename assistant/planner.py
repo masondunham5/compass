@@ -1,6 +1,9 @@
 """Draft a time-blocked plan: workouts and schoolwork fitted around fixed commitments.
 
-Fixed (never moved): busy calendar events, work shifts, and blocks you've already accepted.
+Fixed (never moved): school/ICS calendar events, work shifts, your own Compass events and blocks
+you've already accepted. Personal Outlook events are fixed too, except that when schoolwork or a
+to-do can't fit before its deadline, the draft may suggest moving one of them (a "move" draft you
+accept or ignore; see `_make_room`).
 Flexible, placed in this order:
   1. Workouts — each planned session goes in the best free slot on its own day (prefers
      3–8 PM). If there's no room, the draft says so instead of silently skipping it.
@@ -18,7 +21,7 @@ and treated as fixed the next time the draft is built.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -32,6 +35,7 @@ SETTINGS = {
     "study_start": 9 * 60,      # study blocks don't start before this
     "review_blocks": 2, "review_minutes": 60,
     "daily_task_cap": 120,      # minutes of personal to-dos per day
+    "max_moves": 3,             # personal Outlook events suggested for moving per draft
 }
 WORKOUT_WINDOW = (15 * 60, 20 * 60)
 
@@ -67,11 +71,12 @@ class Day:
     open_from: int
     study_minutes: int = 0
     task_minutes: int = 0
+    held: list[dict[str, Any]] = field(default_factory=list)  # movable personal Outlook events (busy too)
 
     def free(self, gap: int) -> list[tuple[int, int]]:
         """Free intervals between open_from and day end, keeping `gap` minutes around busy blocks."""
         slots, cursor = [], self.open_from
-        for a, b in sorted(self.busy):
+        for a, b in sorted(self.busy + [(h["start"], h["end"]) for h in self.held]):
             if a - gap > cursor:
                 slots.append((cursor, a - gap))
             cursor = max(cursor, b + gap)
@@ -93,13 +98,65 @@ def _build_days(db: sqlite3.Connection, start: date, days: int, now: datetime, a
     for offset in range(days):
         day = start + timedelta(days=offset)
         # Fixed: school/ICS feeds, personal Outlook, your own events, work shifts — then accepted blocks.
-        busy = list(availability._busy_blocks(availability.fixed_events(db, day), day, 0, 24 * 60))
+        fixed = availability.fixed_events(db, day)
+        held = [event for event in fixed if event.get("movable")]
+        busy = list(availability._busy_blocks([e for e in fixed if not e.get("movable")], day, 0, 24 * 60))
         busy += [(b["start"], b["end"]) for b in accepted if b["block_date"] == day.isoformat()]
         open_from = SETTINGS["day_start"]
         if day == now.date():
             open_from = max(open_from, ((now.hour * 60 + now.minute + 14) // 15) * 15)
-        out[day.isoformat()] = Day(day, busy, open_from)
+        midnight = datetime.combine(day, datetime.min.time())
+        spans = [{"id": e["id"], "title": e["title"], "start": int((datetime.fromisoformat(e["start"]) - midnight).total_seconds() // 60),
+                  "end": int((datetime.fromisoformat(e["end"]) - midnight).total_seconds() // 60)} for e in held]
+        out[day.isoformat()] = Day(day, busy, open_from, held=spans)
     return out
+
+
+def _closest(day: Day, minutes: int, around: int) -> int | None:
+    """The free start nearest `around` (minutes after midnight) that fits `minutes`, on 5-minute marks."""
+    best = None
+    for a, b in day.free(SETTINGS["gap"]):
+        if b - a < minutes:
+            continue
+        start = min(max(around, a), b - minutes)
+        start = start - start % 5 if start - start % 5 >= a else start
+        if best is None or abs(start - around) < abs(best - around):
+            best = start
+    return best
+
+
+def _make_room(plan_days: dict[str, Day], day: Day, minutes: int, latest_end: int | None, earliest: int) -> tuple[int, dict[str, Any]] | None:
+    """Find a personal Outlook event on `day` that, moved elsewhere, frees `minutes` there.
+    Returns (slot for the work, the move) without changing anything, or None."""
+    for event in sorted(day.held, key=lambda h: h["start"]):
+        if event.get("fixed_by_move"):
+            continue
+        day.held.remove(event)
+        try:
+            slot = _place(day, minutes, latest_end=latest_end, earliest=earliest)
+            if slot is None:
+                continue
+            day.take(slot, minutes)  # pretend the work is there while finding the event a new home
+            try:
+                length = event["end"] - event["start"]
+                best = None  # (score, day, start): same time of day if possible, soon after
+                for target in plan_days.values():
+                    if target.date < day.date:
+                        continue
+                    new_start = _closest(target, length, event["start"])
+                    if new_start is None or (target is day and new_start == event["start"]):
+                        continue
+                    score = (target.date - day.date).days * 180 + abs(new_start - event["start"])
+                    if best is None or score < best[0]:
+                        best = (score, target, new_start)
+                if best:
+                    return slot, {"event": event, "day": best[1], "start": best[2], "minutes": length}
+            finally:
+                day.busy.pop()
+        finally:
+            if event not in day.held and not event.get("moving"):
+                day.held.append(event)
+    return None
 
 
 def _place(day: Day, minutes: int, prefer: tuple[int, int] | None = None, latest_end: int | None = None, earliest: int = 0) -> int | None:
@@ -131,10 +188,41 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
     warnings: list[str] = []
     accepted_refs = {(b["kind"], b["ref"]) for b in accepted}
 
-    def add(day: Day, start_min: int, minutes: int, kind: str, ref: str, title: str, course: str = "") -> None:
+    def add(day: Day, start_min: int, minutes: int, kind: str, ref: str, title: str, course: str = "") -> dict[str, Any]:
         day.take(start_min, minutes)
         drafts.append({"id": f"{kind}:{ref}:{day.date.isoformat()}:{start_min}", "block_date": day.date.isoformat(), "start": start_min,
                        "end": start_min + minutes, "kind": kind, "ref": ref, "title": title, "course": course})
+        return drafts[-1]
+
+    moves_left = [SETTINGS["max_moves"]]
+
+    def relieve(remaining: int, last_day: date, kind: str, ref: str, title: str, course: str, cap_key: str, cap: int,
+                latest_for: Any) -> int:
+        """Last resort before a deadline: suggest moving personal Outlook events to make room."""
+        for day in sorted(plan_days.values(), key=lambda d: d.date):
+            if remaining <= 0 or moves_left[0] <= 0 or day.date > last_day:
+                break
+            while remaining > 0 and moves_left[0] > 0 and getattr(day, cap_key) < cap:
+                chunk = min(remaining, SETTINGS["max_block"], cap - getattr(day, cap_key))
+                if chunk < min(SETTINGS["min_block"], remaining):
+                    break
+                found = _make_room(plan_days, day, chunk, latest_for(day), SETTINGS["study_start"])
+                if not found:
+                    break
+                slot, move = found
+                event, target = move["event"], move["day"]
+                event["moving"] = True
+                day.held.remove(event)
+                work = add(day, slot, chunk, kind, ref, title, course)
+                moved = add(target, move["start"], move["minutes"], "move", event["id"], event["title"])
+                moved.update({"from_date": day.date.isoformat(), "from_start": event["start"], "from_end": event["end"],
+                              "for_title": title, "for_id": work["id"]})
+                target.held.append({**event, "start": move["start"], "end": move["start"] + move["minutes"], "fixed_by_move": True})
+                target.busy.pop()  # the moved event is tracked in held, not busy
+                setattr(day, cap_key, getattr(day, cap_key) + chunk)
+                remaining -= chunk
+                moves_left[0] -= 1
+        return remaining
 
     # 1. Workouts on their planned day.
     sessions = db.execute("SELECT id, session_date, kind, title, minutes FROM sessions WHERE status = 'planned' AND session_date BETWEEN ? AND ? AND kind IN ('strength', 'run', 'mobility') ORDER BY session_date",
@@ -233,6 +321,9 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
                             break
             if remaining <= 0:
                 break
+        if remaining > 0 and due_day <= horizon_end and not overdue:
+            remaining = relieve(remaining, due_day, "study", task.key, label, task.course, "study_minutes", SETTINGS["daily_study_cap"],
+                                lambda d, due_day=due_day, due_minute=due_minute: due_minute if d.date == due_day else None)
         if remaining > 0 and due_day <= horizon_end:  # later deadlines get more days in a future draft
             warnings.append(f"Couldn't fit {remaining} min of {label} before it's due ({task.due.strftime('%a %b %d, %I:%M %p').replace(' 0', ' ')}).")
 
@@ -271,6 +362,9 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
                         break
             if remaining <= 0:
                 break
+        if remaining > 0 and due and due >= now and due.date() <= horizon_end:
+            remaining = relieve(remaining, due.date(), "task", todo["id"], todo["title"], "", "task_minutes", SETTINGS["daily_task_cap"],
+                                lambda d, due=due: due.hour * 60 + due.minute if d.date == due.date() else None)
         if remaining > 0 and due and due.date() <= horizon_end:
             warnings.append(f"Couldn't fit {remaining} min of “{todo['title']}” before it's due ({due.strftime('%a %b %d')}).")
 

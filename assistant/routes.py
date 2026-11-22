@@ -242,14 +242,21 @@ def plan(start: str | None = None, days: int = 7) -> dict[str, Any]:
 
 @router.post("/plan/accept")
 def accept_plan(payload: AcceptRequest) -> dict[str, Any]:
+    """Accept draft blocks. A "move" draft changes the time of one of your personal Outlook events
+    (only when you accept it); everything else is stored as a plan block."""
     from assistant import outlook, planner
+    moves = [b for b in payload.blocks if b.get("kind") == "move"]
     with connection() as db:
         try:
-            saved = planner.accept(db, payload.blocks)
+            for move in moves:
+                outlook.edit_event(db, str(move["ref"]), {"date": move["block_date"], "start": int(move["start"]), "end": int(move["end"])})
+            saved = planner.accept(db, [b for b in payload.blocks if b.get("kind") != "move"])
+        except outlook.OutlookError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         except (KeyError, ValueError, TypeError) as error:
             raise HTTPException(status_code=400, detail="Those plan blocks are malformed. Rebuild the plan and try again.") from error
     outlook.sync_soon()
-    return {"accepted": saved}
+    return {"accepted": saved + len(moves), "moved": len(moves)}
 
 
 @router.post("/plan/unaccept")
@@ -290,6 +297,7 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
             plan_start = max(first, today)
             plan = planner.build(db, plan_start, (last - plan_start).days + 1)
         draft_blocks = [b for d in (plan or {}).get("days", []) for b in d["blocks"] if b["status"] == "draft"]
+        moving = {b["ref"] for b in draft_blocks if b["kind"] == "move"}
         accepted = [dict(row) for row in db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (first.isoformat(), last.isoformat()))]
         placed_sessions = {b["ref"] for b in accepted + draft_blocks if b["kind"] == "workout"}
         sessions = _workouts(db, first, last)
@@ -308,6 +316,9 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                               "location": event.get("location") or "", "calendar": event.get("feed_name") or "",
                               "event_id": event.get("event_id"), "occurrence": event.get("occurrence"), "repeat": event.get("repeat"),
                               "notes": event.get("notes") or ""})
+                if source == "outlook":
+                    items[-1].update({"outlook_id": event["id"], "movable": event.get("movable", False), "organizer": event.get("organizer", True),
+                                      "series": event.get("series", False), "moving": event["id"] in moving})
             for block in [b for b in accepted if b["block_date"] == iso]:
                 items.append({"id": block["id"], "source": "plan", "kind": block["kind"], "title": block["title"], "all_day": False,
                               "start": block["start"], "end": block["end"], "busy": True, "block": block})
@@ -457,6 +468,41 @@ def remove_todo(todo_id: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- personal Outlook (write-back)
 
+class OutlookEventChange(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    date: str | None = None
+    start: int | None = Field(default=None, ge=0, le=24 * 60)
+    end: int | None = Field(default=None, ge=0, le=24 * 60)
+    location: str | None = Field(default=None, max_length=120)
+    busy: bool | None = None
+
+
+@router.patch("/outlook/events/{event_id:path}")
+def edit_outlook_event(event_id: str, payload: OutlookEventChange) -> dict[str, Any]:
+    """Change one of your personal Outlook events (just this occurrence, for a repeating one)."""
+    from assistant import outlook
+    if payload.date:
+        try:
+            date.fromisoformat(payload.date)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="Use YYYY-MM-DD.") from error
+    with connection() as db:
+        try:
+            return {"event": outlook.edit_event(db, event_id, payload.model_dump(exclude_none=True))}
+        except outlook.OutlookError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.delete("/outlook/events/{event_id:path}")
+def delete_outlook_event(event_id: str) -> dict[str, Any]:
+    from assistant import outlook
+    with connection() as db:
+        try:
+            outlook.delete_event(db, event_id)
+        except outlook.OutlookError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"deleted": True}
+
 class OutlookConnect(BaseModel):
     client_id: str = Field(max_length=200)  # start_sign_in checks the GUID shape with a readable message
 
@@ -491,7 +537,7 @@ def outlook_sync() -> dict[str, Any]:
 
 @router.post("/outlook/disconnect")
 def outlook_disconnect() -> dict[str, Any]:
-    """Forget the sign-in on this computer. The Compass calendar stays in Outlook (delete it there if you want)."""
+    """Forget the sign-in on this computer. Events Compass added stay in your Outlook Calendar."""
     from assistant import outlook
     with connection() as db:
         outlook.disconnect(db)

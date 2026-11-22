@@ -24,14 +24,18 @@ GRAPH_CALENDAR_COLORS = {"auto", "lightBlue", "lightGreen", "lightOrange", "ligh
 
 
 class FakeGraph:
-    """Just enough of Graph's calendar API: calendars, events, 404s."""
+    """Just enough of Graph's calendar API: the main Calendar (/me/calendar), other calendars,
+    events, calendarView, 404s. `default_calendar` holds your own events in the main Calendar."""
 
     def __init__(self):
         self.calendars: dict[str, str] = {}
-        self.events: dict[str, dict] = {}
+        self.events: dict[str, dict] = {}          # events Compass created (any calendar)
         self.calls: list[tuple[str, str]] = []
         self.counter = 0
-        self.default_calendar: list[dict] = []  # your normal Outlook calendar (read-only for Compass)
+        self.default_calendar: list[dict] = []     # events you made yourself in the main Calendar
+
+    def _personal(self, eid):
+        return next((item for item in self.default_calendar if item["id"] == eid), None)
 
     def __call__(self, method, url, headers, body):
         assert headers["Authorization"] == "Bearer test-token"
@@ -40,7 +44,13 @@ class FakeGraph:
         payload = json.loads(body) if body else None
         parts = path.strip("/").split("/")
         if parts == ["me", "calendarView"] and method == "GET":
-            return 200, json.dumps({"value": self.default_calendar}).encode()
+            mine = [{"id": eid, **{k: v for k, v in e.items() if k != "calendar"}} for eid, e in self.events.items() if e["calendar"] == "main"]
+            return 200, json.dumps({"value": self.default_calendar + mine}).encode()
+        if parts == ["me", "calendar", "events"] and method == "POST":
+            self.counter += 1
+            eid = f"ev{self.counter}"
+            self.events[eid] = {**payload, "calendar": "main"}
+            return 201, json.dumps({"id": eid}).encode()
         if parts[:2] == ["me", "calendars"]:
             if len(parts) == 2 and method == "GET":
                 return 200, json.dumps({"value": [{"id": i, "name": n} for i, n in self.calendars.items()]}).encode()
@@ -51,15 +61,16 @@ class FakeGraph:
                 cid = f"cal{self.counter}"
                 self.calendars[cid] = payload["name"]
                 return 201, json.dumps({"id": cid}).encode()
-            if len(parts) == 3:
-                return (200, b'{"id": "x"}') if parts[2] in self.calendars else (404, b"")
-            if len(parts) == 4 and parts[3] == "events" and method == "POST":
-                self.counter += 1
-                eid = f"ev{self.counter}"
-                self.events[eid] = {**payload, "calendar": parts[2]}
-                return 201, json.dumps({"id": eid}).encode()
         if parts[:2] == ["me", "events"] and len(parts) == 3:
             eid = parts[2]
+            personal = self._personal(eid)
+            if personal is not None:
+                if method == "PATCH":
+                    personal.update(payload)
+                    return 200, b"{}"
+                if method == "DELETE":
+                    self.default_calendar.remove(personal)
+                    return 204, b""
             if eid not in self.events:
                 return 404, b""
             if method == "PATCH":
@@ -90,17 +101,17 @@ def add_block(db, block_id, offset, start, end, kind="study", title="CSE 231: Pr
                (block_id, (TODAY + timedelta(days=offset)).isoformat(), start, end, kind, title))
 
 
-def test_sync_creates_calendar_and_events_then_updates_and_deletes(db):
+def test_sync_writes_into_the_main_calendar_then_updates_and_deletes(db):
     graph = FakeGraph()
     add_block(db, "b1", 1, 9 * 60, 10 * 60 + 30)
     add_block(db, "b2", 2, 17 * 60, 18 * 60, kind="workout", title="Legs")
     add_block(db, "far", 40, 9 * 60, 10 * 60)  # outside the 3-week window
     first = outlook.sync(db, transport=graph)
-    assert first == {"created": 2, "updated": 0, "deleted": 0, "unchanged": 0, "read": 0}
-    assert list(graph.calendars.values()) == ["Compass"]
+    assert first == {"created": 2, "updated": 0, "deleted": 0, "unchanged": 0, "read": 0}  # its own events aren't read back as busy
+    assert graph.calendars == {}  # no separate calendar any more
     subjects = sorted(e["subject"] for e in graph.events.values())
     assert subjects == ["Study: CSE 231: Project 07", "Workout: Legs"]
-    assert all(e["calendar"] == "cal1" and e["start"]["timeZone"] == "UTC" for e in graph.events.values())
+    assert all(e["calendar"] == "main" and e["categories"] == ["Compass"] and e["start"]["timeZone"] == "UTC" for e in graph.events.values())
 
     assert outlook.sync(db, transport=graph) == {"created": 0, "updated": 0, "deleted": 0, "unchanged": 2, "read": 0}
     db.execute("UPDATE plan_blocks SET start = ?, end = ? WHERE id = 'b1'", (11 * 60, 12 * 60))
@@ -109,13 +120,16 @@ def test_sync_creates_calendar_and_events_then_updates_and_deletes(db):
     assert len(graph.events) == 1
 
 
-def test_calendar_deleted_in_outlook_is_recreated_and_events_reposted(db):
+def test_events_in_the_old_compass_calendar_move_to_the_main_calendar(db):
     graph = FakeGraph()
+    graph.calendars["old"] = "Compass"
+    graph.events["old1"] = {"subject": "Study: CSE 231: Project 07", "calendar": "old"}
+    db.execute("INSERT INTO outlook_links (block_id, event_id, fingerprint, synced_at) VALUES ('b1', 'old1', 'x', 't')")
     add_block(db, "b1", 1, 9 * 60, 10 * 60)
-    outlook.sync(db, transport=graph)
-    graph.calendars.clear(); graph.events.clear()  # you deleted the Compass calendar in Outlook
     result = outlook.sync(db, transport=graph)
-    assert result["created"] == 1 and list(graph.calendars.values()) == ["Compass"]
+    assert result["created"] == 1 and "old1" not in graph.events
+    assert [e["calendar"] for e in graph.events.values()] == ["main"]
+    assert outlook.sync(db, transport=graph)["unchanged"] == 1  # one-time only
 
 
 def test_event_edited_away_in_outlook_is_recreated(db):
@@ -127,13 +141,19 @@ def test_event_edited_away_in_outlook_is_recreated(db):
     assert outlook.sync(db, transport=graph)["created"] == 1
 
 
-def test_only_the_compass_calendar_is_touched(db):
+def test_your_own_outlook_events_are_never_changed_by_sync(db):
     graph = FakeGraph()
-    graph.calendars["personal"] = "Calendar"
+    graph.default_calendar = [{"id": "p1", "subject": "Dentist", "start": {"dateTime": f"{TODAY + timedelta(days=1)}T15:00:00", "timeZone": "UTC"},
+                               "end": {"dateTime": f"{TODAY + timedelta(days=1)}T16:00:00", "timeZone": "UTC"}, "isAllDay": False}]
     add_block(db, "b1", 1, 9 * 60, 10 * 60)
+    for _ in range(2):
+        outlook.sync(db, transport=graph)
+    assert not any(method in ("PATCH", "DELETE") and path.endswith("/p1") for method, path in graph.calls)
+    assert [row[0] for row in db.execute("SELECT title FROM outlook_events")] == ["Dentist"]
+    # A Compass-tagged event Compass lost track of is still not read back as your own.
+    graph.default_calendar.append({**graph.default_calendar[0], "id": "p2", "subject": "Study: stray", "categories": ["Compass"]})
     outlook.sync(db, transport=graph)
-    assert all(e["calendar"] != "personal" for e in graph.events.values())
-    assert not any(method in ("PATCH", "DELETE") and "personal" in path for method, path in graph.calls)
+    assert [row[0] for row in db.execute("SELECT title FROM outlook_events")] == ["Dentist"]
 
 
 def test_errors_are_readable_and_never_contain_the_token(db):

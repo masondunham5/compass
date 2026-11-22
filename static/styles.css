@@ -632,6 +632,8 @@ input[type="range"] { accent-color: var(--accent); }
 .cal-item.short b { -webkit-line-clamp: 1; }
 .cal-item.draft { background: transparent; border: 1.5px dashed var(--c); border-left-width: 3px; border-left-style: solid; }
 .cal-item.free { opacity: .6; }
+.cal-item.moving { opacity: .45; }
+.cal-item.moving b { text-decoration: line-through; }
 .cal.is-week .cal-item { padding: 2px 3px; font-size: .64rem; border-left-width: 2px; }
 .cal.is-week .cal-item b { -webkit-line-clamp: 4; font-weight: 600; }
 .cal-now { position: absolute; left: -3px; right: 0; height: 2px; background: var(--red); pointer-events: none; z-index: 2; }

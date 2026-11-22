@@ -27,7 +27,7 @@ function renderOutlook(status) {
     return;
   }
   if (status.connected) {
-    box.innerHTML = `<p><b>Connected</b> as ${esc(status.account || "your account")}.<br>${status.linked_events} event${status.linked_events === 1 ? "" : "s"} in the Compass calendar${status.last_sync ? ` · last sync ${esc(syncTime(status.last_sync))}` : ""}.</p>
+    box.innerHTML = `<p><b>Connected</b> as ${esc(status.account || "your account")}.<br>${status.linked_events} event${status.linked_events === 1 ? "" : "s"} Compass added to your Calendar${status.last_sync ? ` · last sync ${esc(syncTime(status.last_sync))}` : ""}.</p>
       ${status.last_error ? `<p class="note error">${esc(status.last_error)}</p>` : ""}
       <p class="faint">Syncs a few seconds after you accept or change plan blocks, and every 30 minutes. Edits made in Outlook are overwritten — change things in Compass.</p>
       <div class="sheet-actions"><button class="btn btn-primary" type="button" id="outlook-sync">Sync now</button><button class="btn btn-ghost" type="button" id="outlook-disconnect">Disconnect</button></div>
@@ -42,7 +42,7 @@ function renderOutlook(status) {
       } catch (error) { const note = $("#outlook-status"); note.textContent = error.message; note.classList.add("error"); note.hidden = false; event.target.disabled = false; event.target.textContent = "Sync now"; }
     };
     $("#outlook-disconnect").onclick = async () => {
-      if (!confirm("Disconnect Outlook on this computer? The Compass calendar stays in Outlook; delete it there if you want.")) return;
+      if (!confirm("Disconnect Outlook on this computer? Events Compass already added stay in your Outlook Calendar.")) return;
       renderOutlook(await api("/api/assistant/outlook/disconnect", { method: "POST" }));
     };
     return;
@@ -86,7 +86,7 @@ function renderAgenda(agenda, alerts, todayPlan = null) {
   const review = $("#review-today-plan");
   if (review) review.onclick = () => selectView("week");
 }
-const KIND_LABEL_SHORT = { study: "study", review: "exam review", workout: "workout" };
+const KIND_LABEL_SHORT = { study: "study", review: "exam review", workout: "workout", task: "to-do", move: "move" };
 
 function renderCalendarSettings(feeds) {
   $("#calendar-list").innerHTML = feeds.map(feed => `<div class="feed"><b>${esc(feed.name)} <span class="muted">· ${esc(feed.kind)}${feed.source === "file" ? " · uploaded file" : ""}</span></b>

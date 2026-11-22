@@ -141,7 +141,7 @@ def test_your_events_are_written_to_outlook_and_removed_when_deleted(db):
                                   "repeat_until": (TOMORROW + timedelta(days=2)).isoformat(), "location": "Library"})
     assert outlook.sync(db, transport=graph)["created"] == 3
     assert {e["subject"] for e in graph.events.values()} == {"Book club"}
-    assert all(e["location"]["displayName"] == "Library" and e["calendar"] == "cal1" for e in graph.events.values())
+    assert all(e["location"]["displayName"] == "Library" and e["calendar"] == "main" for e in graph.events.values())
     events.delete_event(db, event["id"], "one", TOMORROW.isoformat())
     assert outlook.sync(db, transport=graph)["deleted"] == 1
     events.update_event(db, event["id"], {"title": "Book club (moved)"})
@@ -177,3 +177,67 @@ def test_calendar_api_combines_every_source(db):
         assert client.patch(f"/api/assistant/events/{event_id}", json={"start": at(19), "end": at(20)}).json()["event"]["title"] == "Dinner"
         assert client.delete(f"/api/assistant/events/{event_id}").status_code == 200
         assert client.get(f"/api/assistant/events/{event_id}").status_code == 404
+
+
+# ---------------------------------------------------------------- changing your personal Outlook events
+
+def personal(eid, subject, day, start_hour, end_hour, **extra):
+    return {"id": eid, "subject": subject, "start": {"dateTime": utc(day, start_hour), "timeZone": "UTC"},
+            "end": {"dateTime": utc(day, end_hour), "timeZone": "UTC"}, "isAllDay": False, "showAs": "busy", **extra}
+
+
+def test_personal_outlook_events_can_be_edited_and_deleted(db):
+    graph = FakeGraph()
+    graph.default_calendar = [personal("p1", "Errand", TOMORROW, 14, 15), personal("p2", "Gym", TOMORROW, 7, 8, type="occurrence")]
+    outlook.sync(db, transport=graph)
+    moved = outlook.edit_event(db, "p1", {"title": "Errand (bank)", "start": at(16), "end": at(17, 30)}, transport=graph)
+    assert (moved["title"], moved["start"][11:], moved["end"][11:]) == ("Errand (bank)", "16:00", "17:30")
+    assert graph.default_calendar[0]["subject"] == "Errand (bank)" and graph.default_calendar[0]["start"]["dateTime"] == utc(TOMORROW, 16)[:19]
+    assert outlook.events_between(db, TOMORROW, TOMORROW)[-1]["title"] == "Errand (bank)"  # local copy updated right away
+    with pytest.raises(outlook.OutlookError):
+        outlook.edit_event(db, "p1", {"start": at(18), "end": at(17)}, transport=graph)
+    assert [e["series"] for e in outlook.events_between(db, TOMORROW, TOMORROW)] == [True, False]
+    outlook.delete_event(db, "p2", transport=graph)
+    assert [e["id"] for e in graph.default_calendar] == ["p1"]
+    with pytest.raises(outlook.OutlookError):
+        outlook.delete_event(db, "nope", transport=graph)  # only events Compass read from your Calendar
+
+
+def test_only_your_own_short_future_events_are_movable(db):
+    graph = FakeGraph()
+    graph.default_calendar = [personal("a", "Errand", TOMORROW, 14, 15), personal("b", "Invite", TOMORROW, 10, 11, isOrganizer=False),
+                              personal("c", "Trip", TOMORROW, 8, 20), personal("d", "Reminder", TOMORROW, 12, 13, showAs="free")]
+    outlook.sync(db, transport=graph)
+    assert {e["title"]: e["movable"] for e in outlook.events_between(db, TOMORROW, TOMORROW)} == {"Trip": False, "Invite": False, "Reminder": False, "Errand": True}
+
+
+def test_planner_suggests_moving_a_personal_event_to_meet_a_deadline(db, monkeypatch):
+    graph = FakeGraph()
+    after = TOMORROW + timedelta(days=1)
+    graph.default_calendar = [personal("busy1", "Shift swap", TOMORROW, 7, 14, isOrganizer=False), personal("errand", "Errand", TOMORROW, 14, 16),
+                              personal("busy2", "Family", TOMORROW, 16, 23, isOrganizer=False)]
+    outlook.sync(db, transport=graph)
+    events.add_todo(db, {"title": "Pay rent", "minutes": 60, "due_date": TOMORROW.isoformat(), "due_time": "18:00"})
+    plan = planner.build(db, TOMORROW, 2, now=NOW)
+    drafts = [b for day in plan["days"] for b in day["blocks"] if b["status"] == "draft"]
+    task = next(b for b in drafts if b["kind"] == "task")
+    move = next(b for b in drafts if b["kind"] == "move")
+    assert (task["block_date"], task["start"]) == (TOMORROW.isoformat(), at(14, 15))
+    assert (move["ref"], move["from_date"], move["from_start"], move["block_date"], move["start"], move["end"]) == \
+        ("errand", TOMORROW.isoformat(), at(14), after.isoformat(), at(14), at(16))
+    assert not any("Pay rent" in w for w in plan["warnings"])
+
+    # Ignoring the suggestion changes nothing; accepting it moves the event in Outlook.
+    assert graph.default_calendar[1]["start"]["dateTime"].startswith(utc(TOMORROW, 14)[:16])
+    monkeypatch.setattr(outlook, "_urllib_transport", graph)
+    db.commit()  # visible to the app's own connections
+    with TestClient(app.app) as client:
+        grid = client.get(f"/api/assistant/calendar?start={TOMORROW.isoformat()}&days=2").json()
+        errand = next(i for i in grid["days"][0]["items"] if i["source"] == "outlook" and i["title"] == "Errand")
+        assert errand["movable"] and errand["moving"] and errand["outlook_id"] == "errand"
+        clean = {k: v for k, v in move.items() if k not in ("status", "start_label", "end_label")}
+        assert client.post("/api/assistant/plan/accept", json={"blocks": [clean, {k: v for k, v in task.items() if k not in ("status", "start_label", "end_label")}]}).json() == {"accepted": 2, "moved": 1}
+        assert graph.default_calendar[1]["start"]["dateTime"] == utc(after, 14)[:19]
+        assert client.patch("/api/assistant/outlook/events/errand", json={"title": "Errand!"}).json()["event"]["title"] == "Errand!"
+        assert client.patch("/api/assistant/outlook/events/missing", json={"title": "x"}).status_code == 400
+        assert client.delete("/api/assistant/outlook/events/errand").json() == {"deleted": True}

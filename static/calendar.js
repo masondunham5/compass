@@ -7,7 +7,7 @@ const cal = { mode: "day", day: null, data: null, start: null };
 try { cal.mode = localStorage.getItem("compass.calMode") || "day"; } catch { /* storage blocked */ }
 
 const SOURCE_LABEL = { feed: "Calendar", outlook: "Outlook", mine: "Your event", work: "Work", plan: "Plan", draft: "Suggestion", session: "Workout" };
-const BLOCK_LABEL = { study: "Study", review: "Exam review", workout: "Workout", task: "To-do" };
+const BLOCK_LABEL = { study: "Study", review: "Exam review", workout: "Workout", task: "To-do", move: "Suggested move" };
 const REPEAT_LABEL = { none: "Doesn't repeat", daily: "Every day", weekdays: "Weekdays", weekly: "Every week", biweekly: "Every 2 weeks", monthly: "Every month" };
 
 const clockLabel = minutes => { const h = Math.floor(minutes / 60) % 24, m = minutes % 60; return `${(h % 12) || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "AM" : "PM"}`; };
@@ -17,6 +17,7 @@ const fromHHMM = value => { const [h, m] = String(value || "0:0").split(":").map
 
 /* The color key for an item: plan blocks by kind, everything else by source. */
 function colorKey(item) {
+  if (item.kind === "move") return "outlook";
   if (item.source === "plan" || item.source === "draft") return item.kind;
   if (item.source === "session") return "workout";
   return item.source;
@@ -56,11 +57,12 @@ window.syncCalendarModeUI = syncModeUI;
 
 function renderPlanStrip(data) {
   const drafts = data.days.flatMap(day => day.items.filter(item => item.source === "draft"));
+  const moves = drafts.filter(item => item.kind === "move").length;
   const warnings = data.warnings || [];
   if (!drafts.length && !warnings.length) { $("#plan-summary").innerHTML = ""; return; }
   $("#plan-summary").innerHTML = `<article class="card plan-card">
       <div class="plan-top"><div><b>${drafts.length ? `${drafts.length} suggested block${drafts.length === 1 ? "" : "s"}` : "Plan"}</b>
-        <small>Dashed blocks are suggestions: tap one to accept it, or accept them all.</small></div>
+        <small>Dashed blocks are suggestions: tap one to accept it, or accept them all.${moves ? ` Includes ${moves} suggested move${moves === 1 ? "" : "s"} of your Outlook events to make room before a deadline.` : ""}</small></div>
         ${drafts.length ? `<button class="btn btn-primary small" type="button" id="cal-accept-all">Accept all</button>` : ""}</div>
       ${warnings.length ? `<ul class="plan-warnings">${warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}</article>`;
   const all = $("#cal-accept-all");
@@ -119,9 +121,9 @@ function drawGrid() {
       const left = cascade ? Math.min(item._lane, 3) * 18 : item._lane * (100 / item._lanes);
       const width = cascade ? 100 - left : 100 / item._lanes;
       const short = height < 34;
-      return `<button type="button" class="cal-item c-${esc(colorKey(item))}${item.source === "draft" ? " draft" : ""}${item.busy === false && item.source !== "draft" ? " free" : ""}${short ? " short" : ""}"
+      return `<button type="button" class="cal-item c-${esc(colorKey(item))}${item.source === "draft" ? " draft" : ""}${item.busy === false && item.source !== "draft" ? " free" : ""}${item.moving ? " moving" : ""}${short ? " short" : ""}"
         style="top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 2px);z-index:${item._lane + 1}" data-item="${esc(item.id)}" data-date="${day.date}">
-        <b>${esc(cleanTitle(item.title))}</b>${short || isWeek ? "" : `<small>${clockLabel(item.start)} – ${clockLabel(item.end)}${item.location ? ` · ${esc(item.location)}` : ""}</small>`}</button>`;
+        <b>${item.kind === "move" ? "Move: " : ""}${esc(cleanTitle(item.title))}</b>${short || isWeek ? "" : `<small>${clockLabel(item.start)} – ${clockLabel(item.end)}${item.location ? ` · ${esc(item.location)}` : ""}</small>`}</button>`;
     }).join("");
     const nowLine = day.date === today && nowMin >= firstHour * 60 && nowMin <= lastHour * 60 ? `<i class="cal-now" style="top:${(nowMin - firstHour * 60) * HOUR_PX / 60}px"></i>` : "";
     return `<div class="cal-col${day.date === today ? " is-today" : ""}" data-col="${day.date}">${blocks}${nowLine}</div>`;
@@ -165,10 +167,12 @@ async function openItem(date, id) {
   const { item } = found;
   if (item.source === "session") { openSessionSheet(await api(`/api/sessions/${encodeURIComponent(item.session_id)}`)); return; }
   if (item.source === "mine") { const { event } = await api(`/api/assistant/events/${encodeURIComponent(item.event_id)}`); openEventForm(event, item.occurrence); return; }
+  if (item.source === "outlook") { openOutlookForm(item, found.date); return; }
+  if (item.kind === "move") { openMoveSheet(item, found.date); return; }
   const when = item.all_day ? "All day" : `${clockLabel(item.start)} – ${clockLabel(item.end)}`;
   const kindLabel = item.source === "plan" || item.source === "draft" ? BLOCK_LABEL[item.kind] || "Plan" : SOURCE_LABEL[item.source];
   const where = { feed: `From ${item.calendar || "your calendar"} (read-only). Change it there.`, outlook: "From your personal Outlook. Change it there; Compass plans around it.",
-    work: "From your Work schedule (More → Work schedule).", plan: "Accepted into your plan and in the Compass calendar in Outlook.",
+    work: "From your Work schedule (More → Work schedule).", plan: "Accepted into your plan and in your Outlook Calendar.",
     draft: "A suggestion. Accept it to make it part of your schedule." }[item.source] || "";
   let actions = "";
   if (item.source === "draft") actions = `<button class="btn btn-primary full" type="button" id="item-accept">Accept this block</button>`;
@@ -182,6 +186,58 @@ async function openItem(date, id) {
   if (remove) remove.onclick = async () => { await api("/api/assistant/plan/unaccept", { method: "POST", body: JSON.stringify({ block_id: item.id }) }); closeSheet(); await refreshPlanViews(); };
   const workout = $("#item-open-workout");
   if (workout) workout.onclick = async () => { closeSheet(); openSessionSheet(await api(`/api/sessions/${encodeURIComponent(item.block.ref)}`)); };
+}
+
+/* A suggestion to move one of your personal Outlook events so schoolwork or a to-do fits. */
+function openMoveSheet(item, date) {
+  const b = item.block;
+  const from = `${fmtShort(b.from_date)}, ${clockLabel(b.from_start)} – ${clockLabel(b.from_end)}`;
+  const to = `${fmtShort(date)}, ${clockLabel(item.start)} – ${clockLabel(item.end)}`;
+  sheet(`<p class="kicker">Suggested move · Outlook</p><h2>${esc(cleanTitle(item.title))}</h2>
+    <p class="muted"><b>From</b> ${esc(from)}<br><b>To</b> ${esc(to)}</p>
+    <p class="faint">Makes room for “${esc(cleanTitle(b.for_title || "your work"))}” before it's due. Accepting changes the event in your Outlook Calendar; ignoring it changes nothing.</p>
+    <p class="note error" id="move-error" hidden></p>
+    <button class="btn btn-primary full" type="button" id="move-accept">Move it</button>`);
+  $("#move-accept").onclick = async () => {
+    try { await acceptBlocks([b], $("#move-accept")); closeSheet(); }
+    catch (error) { $("#move-error").textContent = error.message; $("#move-error").hidden = false; }
+  };
+}
+
+/* Edit or delete one of your personal Outlook events (writes to Outlook right away). */
+function openOutlookForm(item, date) {
+  const notes = [item.series ? "Part of a repeating series: changes apply to this one only. Change the whole series in Outlook." : "",
+    item.organizer === false ? "You were invited to this. Changing it only changes your copy; the organizer isn't told." : ""].filter(Boolean);
+  sheet(`<p class="kicker">Outlook · ${esc(fmtShort(date))}</p>
+    <form id="ol-form" class="stack">
+      <label>Title<input id="ol-title" maxlength="200" required value="${esc(item.title)}" autocomplete="off"></label>
+      <label>Date<input id="ol-date" type="date" required value="${esc(date)}"></label>
+      ${item.all_day ? `<p class="faint">All-day event.</p>` : `<div class="form-grid"><label>Starts<input id="ol-start" type="time" step="300" value="${hhmm(item.start)}"></label><label>Ends<input id="ol-end" type="time" step="300" value="${hhmm(item.end)}"></label></div>`}
+      <label>Location <span>optional</span><input id="ol-location" maxlength="120" value="${esc(item.location || "")}"></label>
+      <label class="toggle-row"><input id="ol-busy" type="checkbox" ${item.busy !== false ? "checked" : ""}><span><b>Busy</b><small>The planner keeps this time free.</small></span></label>
+      ${notes.map(note => `<p class="faint">${esc(note)}</p>`).join("")}
+      <p class="note error" id="ol-error" hidden></p>
+      <div class="sheet-actions"><button class="btn btn-danger" type="button" id="ol-delete">Delete</button><button class="btn btn-primary" type="submit">Save to Outlook</button></div>
+    </form>`);
+  const url = `/api/assistant/outlook/events/${encodeURIComponent(item.outlook_id)}`;
+  const fail = error => { $("#ol-error").textContent = error.message; $("#ol-error").hidden = false; };
+  $("#ol-form").onsubmit = async submit => {
+    submit.preventDefault();
+    const body = { title: $("#ol-title").value.trim(), location: $("#ol-location").value.trim(), busy: $("#ol-busy").checked };
+    if ($("#ol-date").value !== date) body.date = $("#ol-date").value;
+    if (!item.all_day) {
+      const start = fromHHMM($("#ol-start").value); let end = fromHHMM($("#ol-end").value);
+      if (end === 23 * 60 + 59) end = 24 * 60;
+      if (start !== item.start || end !== item.end || body.date) Object.assign(body, { start, end, date: body.date || date });
+    }
+    try { await api(url, { method: "PATCH", body: JSON.stringify(body) }); closeSheet(); cal.day = body.date || cal.day; await window.renderWeek(); }
+    catch (error) { fail(error); }
+  };
+  $("#ol-delete").onclick = async () => {
+    if (!confirm(`Delete “${item.title}” from your Outlook Calendar${item.series ? " (this occurrence only)" : ""}? This can't be undone from Compass.`)) return;
+    try { await api(url, { method: "DELETE" }); closeSheet(); await window.renderWeek(); }
+    catch (error) { fail(error); }
+  };
 }
 
 function sheet(html) {
@@ -219,7 +275,7 @@ function openEventForm(event, occurrence, isNew = false) {
       ${repeating ? `<label>Apply changes to<select id="ev-scope"><option value="one">Only this one (${esc(fmtShort(date))})</option><option value="future">This and following</option><option value="all">Every event</option></select></label>` : ""}
       <p class="note error" id="ev-error" hidden></p>
       <div class="sheet-actions">${isNew ? "" : `<button class="btn btn-danger" type="button" id="ev-delete">Delete</button>`}<button class="btn btn-primary" type="submit">${isNew ? "Add event" : "Save"}</button></div>
-      <p class="faint">Goes into the Compass calendar in Outlook when it's connected.</p>
+      <p class="faint">Goes into your Outlook Calendar when it's connected.</p>
     </form>`);
   $("#ev-allday").onchange = event => { $("#ev-times").hidden = event.target.checked; };
   $("#ev-repeat").onchange = event => { $("#ev-until-label").hidden = event.target.value === "none"; };
