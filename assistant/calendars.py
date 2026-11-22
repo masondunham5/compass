@@ -91,7 +91,7 @@ def fetch(url: str) -> bytes:
     except (urllib.error.URLError, TimeoutError) as error:
         raise CalendarError("Couldn't reach the calendar server. Check this computer's internet connection.") from error
     if len(body) > MAX_BYTES:
-        raise CalendarError("That calendar is larger than 10 MB, which is more than Health Hub will import.")
+        raise CalendarError("That calendar is larger than 10 MB, which is more than Compass will import.")
     return body
 
 

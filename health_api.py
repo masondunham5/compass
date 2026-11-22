@@ -298,7 +298,7 @@ def doctor_summary() -> str:
     weeks = trend["weeks"]
     avg = lambda key: round(sum(w[key] for w in weeks if w[key] is not None) / max(1, sum(w[key] is not None for w in weeks)), 1) if any(w[key] is not None for w in weeks) else None
     by_kind = lambda kind: [r for r in records if r["kind"] == kind]
-    body_html = f"""<h1>Health summary</h1><p class="muted">Prepared {today.strftime('%B %d, %Y')} from Health Hub (Garmin data and self-logged records). Not a diagnosis.</p>
+    body_html = f"""<h1>Health summary</h1><p class="muted">Prepared {today.strftime('%B %d, %Y')} from Compass (Garmin data and self-logged records). Not a diagnosis.</p>
 <h2>Last 90 days (weekly averages)</h2><div class="grid"><div>Resting HR<b>{_cell(avg('resting_hr'))} bpm</b></div><div>HRV<b>{_cell(avg('hrv'))} ms</b></div>
 <div>Sleep<b>{_cell(avg('sleep_hours'))} h</b></div><div>Weight<b>{_cell(body['weight_7day_avg'] or body['latest_weight'])} lb</b></div></div>
 <h2>Blood pressure</h2>{_table(['Date', 'Reading', 'Notes'], [[r['recorded_on'], r['value'], r['notes']] for r in by_kind('blood_pressure')])}
@@ -333,7 +333,7 @@ def monthly_report(month: str | None = None) -> str:
         if values:
             lift_rows.append([name, values[0], values[-1], round(values[-1] - values[0], 1)])
     fmt = lambda value, digits=1: "—" if value is None else round(value, digits)
-    body_html = f"""<h1>{first.strftime('%B %Y')}</h1><p class="muted">Health Hub monthly report · {first.isoformat()} to {last.isoformat()}</p>
+    body_html = f"""<h1>{first.strftime('%B %Y')}</h1><p class="muted">Compass monthly report · {first.isoformat()} to {last.isoformat()}</p>
 <h2>Training</h2><div class="grid"><div>Sessions<b>{sum(s['n'] for s in sessions)}</b></div><div>Sets logged<b>{sets[0]}</b></div>
 <div>Volume<b>{round(sets[1] / 1000)}k lb</b></div><div>Runs<b>{runs[0]} · {round(runs[1], 1)} mi</b></div></div>
 <h2>Strength (best estimated 1RM, first vs last week)</h2>{_table(['Lift', 'Start', 'End', 'Change'], lift_rows)}
@@ -342,4 +342,4 @@ def monthly_report(month: str | None = None) -> str:
 <p class="muted">VO₂ max (best this month): {fmt(recovery[4])} · Longest run: {round(runs[2], 1)} mi</p>
 <h2>Habits</h2>{_table(['Habit', 'Days done', 'Current streak'], [[h['name'], sum(1 for done in h['history'] if done), h['streak']] for h in habits])}
 <h2>Goals</h2>{_table(['Goal', 'Current', 'Target', 'Progress'], [[g['title'], g['current'], g['target'], f"{g['percent']}%" if g['percent'] is not None else '—'] for g in goals])}"""
-    return PAGE.format(title=f"Health Hub · {first.strftime('%B %Y')}", body=body_html)
+    return PAGE.format(title=f"Compass · {first.strftime('%B %Y')}", body=body_html)

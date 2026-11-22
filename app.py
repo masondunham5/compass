@@ -1,4 +1,4 @@
-"""Health Hub web app: FastAPI routes and request models.
+"""Compass web app: FastAPI routes and request models.
 
 Logic lives in focused modules — core (database, settings, backups), exercises
 (workout lines, progression), planning (training blocks), readiness (rules engine),
@@ -76,7 +76,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Health Hub",
+    title="Compass",
     description="A local-first training, recovery, and activity planner.",
     version="1.0.0",
     docs_url=None,

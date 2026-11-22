@@ -1,4 +1,4 @@
-"""Dependency-light checks for Health Hub's core planning helpers."""
+"""Dependency-light checks for Compass's core planning helpers."""
 
 from __future__ import annotations
 

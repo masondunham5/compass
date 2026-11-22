@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Health Hub (folder name `lifting_hub`) is a local-first training and recovery planner: FastAPI + SQLite backend, dependency-free HTML/CSS/JS PWA frontend, and an optional Garmin Connect Personal API sync.
+Compass (folder name `lifting_hub`) is a local-first training and recovery planner: FastAPI + SQLite backend, dependency-free HTML/CSS/JS PWA frontend, and an optional Garmin Connect Personal API sync.
 
 ## Commands
 
@@ -62,6 +62,7 @@ There is no linter or build step.
 - **Triggers for sync:** `POST /api/garmin/sync` (first run backfills 14 days, then `GARMIN_SYNC_DAYS` capped at 7), `POST /api/garmin/backfill` (30 days), the CLI, and the daily Task Scheduler job from `scripts/register_garmin_sync_task.ps1`.
 - **`GarminSyncError`** messages are shown to the user and must never include the key or token.
 - **Consumers of Garmin data:** `/api/garmin/dashboard` and `/api/recommendations/training` read `garmin_daily_metrics` (the rules engine uses `sleep_seconds`, `hrv_ms`, `resting_hr`, `stress_avg` with a 28-day rolling baseline). Keep those column names stable.
+- **Product shape:** Compass is a life planner; health/training is one section. Tabs: **Today** (greeting, alerts, Today's schedule from calendars, the training card, habits, recovery snapshot) · **Week** (`renderWeek` in `assistant.js`: busy hours, exams, workouts, best slot per day; tap a day for its agenda) · **Health** (Train / Recovery / Progress as sub-tabs injected by `app.js`; `selectView("health")` reopens the last one) · **More** (calendars/settings, records, reports). `TAB_FOR_VIEW` maps every view to its tab. The project folder, launchers and the Garmin scheduled-task name still say Lifting/Health Hub on purpose.
 - **`static/health.js`** renders the health features (Today alerts/habits, Recovery load/sleep/body/pain, Progress goals/insights/trends, Records view, reminders) using `app.js` globals; `app.js` calls `window.renderHealthHub()` after each `load()`. Reminders use the Notification API while the app is open (no server push yet).
 - **Frontend** (`static/app.js`, `index.html`, `styles.css`) is plain JS calling the JSON API; no build tooling. It is a phone-first dark UI with four tabs (Today, Recovery, Train, Progress) plus Workout and Settings views; desktop shows the same column centered at 640px. Today renders entirely from `GET /api/today` (week strip, focus session with short-day set caps, readiness headline, latest Garmin night, up next). Recovery reads the latest night from that same payload and trends from `/api/garmin/dashboard`. Colors are CSS custom properties at the top of `styles.css`. Bump the `?v=` query on the CSS/JS links in `index.html` (and `CACHE` in `service-worker.js`) when shipping UI changes.
 - **Workout templates:** the default split `logged-routine` (`ROUTINE_DAYS` / `ROUTINE_BY_DAYS` in `app.py`) mirrors the lifting log; deload weeks cap every exercise at 2 sets. `EXERCISE_ALIASES` maps alternate names to the logged name, and `normalize_exercise` uses it, so progress and last-weight suggestions merge aliases.

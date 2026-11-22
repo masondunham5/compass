@@ -1,8 +1,10 @@
-# Health Hub
+# Compass
 
-Health Hub is a local-first, responsive training and recovery planner. It pairs
-a structured lifting/running plan with daily readiness context, workout logging,
-and reviewable Garmin activity imports—without requiring a cloud account.
+Compass is a local-first life planner. It brings your calendars (school and
+personal, read-only), your day, and your week into one place, with health and
+training as a built-in section: a structured lifting/running plan, daily
+readiness from Garmin, workout logging, and recovery insights—without
+requiring a cloud account.
 
 > Portfolio demo project. The repository intentionally excludes personal health
 > data, local databases, exports, and credentials.
@@ -85,7 +87,7 @@ phone deployment as installable outside of your home computer.
 
 ## Optional Garmin Personal API sync
 
-This is an optional **personal-use** connection. Health Hub never stores a
+This is an optional **personal-use** connection. Compass never stores a
 Garmin password. It stores only the Personal API key you create in Garmin
 Connect, and only in a local `.env` file that Git ignores.
 
@@ -93,7 +95,7 @@ On the always-on Windows computer:
 
 1. Create a Garmin Personal API key in Garmin Connect. Do not share it or add
    it to GitHub.
-2. Copy `.env.example` to `.env` in the Health Hub project folder.
+2. Copy `.env.example` to `.env` in the Compass project folder.
 3. Set the following values in `.env`:
 
    ```text
@@ -108,16 +110,16 @@ On the always-on Windows computer:
    .\.venv\Scripts\python.exe garmin_sync.py --days 7
    ```
 
-5. Open Health Hub and review **Recovery**. The Garmin Daily Sync section
+5. Open Compass and review **Recovery**. The Garmin Daily Sync section
    reports connection state, last sync, and the first dashboard metrics.
 
 For automatic daily updates, create a second Task Scheduler task (separate
 from the server task):
 
 ```text
-Program/script: <Health Hub folder>\.venv\Scripts\python.exe
+Program/script: <Compass folder>\.venv\Scripts\python.exe
 Arguments: garmin_sync.py --days 2
-Start in: <Health Hub folder>
+Start in: <Compass folder>
 Trigger: Daily, after Garmin Connect has had time to sync your watch
 ```
 
@@ -129,12 +131,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\register_garmin_sync_task.ps1
 ```
 
 The sync task may be run repeatedly; it upserts daily metrics and ignores
-already-imported activities. If Garmin rejects a key, Health Hub records a
+already-imported activities. If Garmin rejects a key, Compass records a
 safe error message and leaves existing data unchanged.
 
 ## Deterministic training recommendations
 
-Health Hub's daily training recommendation uses no AI model and never changes,
+Compass's daily training recommendation uses no AI model and never changes,
 moves, or cancels a session. It is a transparent rules engine:
 
 1. Start each day at a recovery score of **100**.
@@ -158,7 +160,7 @@ the dashboard clearly indicates which recovery signals are unavailable.
 ### Local backup
 
 Before a major update—or whenever you want a copy of your history—create a
-consistent local snapshot while Health Hub is running:
+consistent local snapshot while Compass is running:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\backup_database.py

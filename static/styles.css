@@ -1,4 +1,4 @@
-/* Health Hub — phone-first dark UI. Desktop centers the same column. */
+/* Compass — phone-first dark UI. Desktop centers the same column. */
 
 :root {
   --bg: #0e0f13;
@@ -490,6 +490,24 @@ button.habit { cursor: pointer; }
 .feed small { display: block; color: var(--muted); font-size: .85rem; margin-top: 2px; }
 .feed .error { color: var(--red); }
 .feed .record-actions { margin-top: 8px; }
+
+/* ---------- Compass: week view, health sub-tabs ---------- */
+#week-title { font-size: 1.7rem; white-space: nowrap; }
+.subnav { display: flex; margin: -8px 0 18px; }
+.subnav button { flex: 1; }
+.week-day { padding: 0; overflow: hidden; }
+.week-day.is-today { box-shadow: inset 3px 0 0 var(--accent); }
+.week-day.heavy .week-day-head b { color: var(--amber); }
+.week-day-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 16px; border: 0; background: none; color: var(--text); text-align: left; }
+.week-day-head .grow b { display: block; font-size: .98rem; }
+.week-day-head .grow small { display: block; color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.week-day-head > svg { color: var(--faint); width: 18px; height: 18px; }
+.exam-tag { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 99px; background: var(--amber-bg); color: var(--amber); font-size: .78rem; font-weight: 700; }
+.week-workouts { display: grid; gap: 6px; padding: 0 16px 12px 74px; }
+.week-workout { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--text); font-size: .9rem; text-align: left; }
+.week-workout span { padding: 1px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: .72rem; font-weight: 700; text-transform: uppercase; }
+.week-workout.completed { color: var(--muted); }
+a.row-item { text-decoration: none; }
 
 /* ---------- Tab bar ---------- */
 .tabbar {

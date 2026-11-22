@@ -1,4 +1,4 @@
-"""Create a timestamped, local-only Health Hub database backup.
+"""Create a timestamped, local-only Compass database backup.
 
 Run from the project root:
     .\\.venv\\Scripts\\python.exe scripts\\backup_database.py
@@ -20,7 +20,7 @@ BACKUPS = ROOT / "backups"
 
 def main() -> None:
     if not SOURCE.exists():
-        print("Stopped: no Health Hub database exists yet. Nothing was changed.")
+        print("Stopped: no Compass database exists yet. Nothing was changed.")
         return
     BACKUPS.mkdir(exist_ok=True)
     destination = BACKUPS / f"health_hub_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"

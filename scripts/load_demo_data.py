@@ -1,4 +1,4 @@
-"""Create an anonymous, portfolio-safe Health Hub demo dataset.
+"""Create an anonymous, portfolio-safe Compass demo dataset.
 
 Run from the project root:
     python scripts/load_demo_data.py

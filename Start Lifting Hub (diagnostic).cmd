@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo Starting Health Hub at http://127.0.0.1:8765
+echo Starting Compass at http://127.0.0.1:8765
 echo Keep this window open while you use the app.
 set "PYTHON=.venv\Scripts\python.exe"
 if not exist "%PYTHON%" set "PYTHON=..\.venv\Scripts\python.exe"

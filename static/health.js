@@ -1,4 +1,4 @@
-/* Health Hub: health features (alerts, habits, load, sleep coach, body, pain, records,
+/* Compass: health features (alerts, habits, load, sleep coach, body, pain, records,
    goals, insights, long-term trends, reminders). Loaded after app.js and uses its helpers. */
 
 const healthState = { hub: null, habits: null, goals: null, insights: null, trends: null, records: null, trendDays: 180, painArea: null };

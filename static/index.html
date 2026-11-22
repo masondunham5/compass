@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui11">
-    <title>Health Hub</title>
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui12">
+    <title>Compass</title>
   </head>
   <body>
     <div id="startup-diagnostic" hidden role="alert"></div>
@@ -23,6 +23,10 @@
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
       <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.5 12h2M19.5 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></symbol>
+      <symbol id="i-week" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M7.5 14h2M11 14h2M14.5 14h2M7.5 17h2M11 17h2"/></symbol>
+      <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.3-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.7-7 10-7 10Z"/><path d="M8 12h2l1-2 2 4 1-2h2"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/></symbol>
     </svg>
 
     <div class="app">
@@ -34,9 +38,10 @@
             <button class="icon-btn" id="today-checkin" type="button" aria-label="Daily check-in" title="Daily check-in"><svg><use href="#i-plus"/></svg></button>
           </header>
           <div class="week-strip" id="week-strip" role="tablist" aria-label="This week"></div>
-          <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
           <div id="today-alerts" class="stack alert-stack"></div>
           <article class="card agenda-card" id="agenda-card" hidden></article>
+          <h2 class="section-title">Training</h2>
+          <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
           <div id="today-extra"></div>
           <p class="caption" id="today-stats-caption" hidden></p>
           <button class="card stat-strip" id="today-stats" type="button" aria-label="Open recovery details"></button>
@@ -121,6 +126,29 @@
           <article class="card list-card" id="progress-list"></article>
         </section>
 
+        <!-- WEEK -->
+        <section id="view-week" class="view" aria-labelledby="week-title">
+          <header class="page-head">
+            <div><p class="kicker" id="week-kicker">&nbsp;</p><h1 id="week-title">Week</h1></div>
+            <div class="week-nav"><button type="button" class="icon-btn small" id="week-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><button type="button" class="icon-btn small" id="week-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div>
+          </header>
+          <div id="week-days" class="stack"></div>
+          <button class="btn btn-ghost full" type="button" id="week-push" style="margin-top:14px">Push training back…</button>
+        </section>
+
+        <!-- MORE -->
+        <section id="view-more" class="view" aria-labelledby="more-title">
+          <header class="page-head"><div><p class="kicker">Compass</p><h1 id="more-title">More</h1></div></header>
+          <article class="card list-card">
+            <button type="button" class="row-item" data-view="settings"><div class="grow"><b>Calendars</b><small>School and personal calendar links</small></div><svg><use href="#i-chevron"/></svg></button>
+            <button type="button" class="row-item" data-view="records"><div class="grow"><b>Health records</b><small>Blood pressure, labs, medications, supplements, visits</small></div><svg><use href="#i-chevron"/></svg></button>
+            <a class="row-item" href="/api/health/report/monthly" target="_blank" rel="noopener"><div class="grow"><b>Monthly report</b><small>Printable summary of this month</small></div><svg><use href="#i-chevron"/></svg></a>
+            <a class="row-item" href="/api/health/report/doctor" target="_blank" rel="noopener"><div class="grow"><b>Doctor summary</b><small>One page for appointments</small></div><svg><use href="#i-chevron"/></svg></a>
+            <button type="button" class="row-item" data-view="settings"><div class="grow"><b>Settings</b><small>Garmin, bodyweight, reminders, install</small></div><svg><use href="#i-chevron"/></svg></button>
+          </article>
+          <p class="faint" style="margin-top:16px">Coming next: tasks and school deadlines, writing your plan into your personal Outlook, and an assistant you can ask to rearrange your week.</p>
+        </section>
+
         <!-- HEALTH RECORDS -->
         <section id="view-records" class="view" aria-labelledby="records-title">
           <header class="page-head"><div><button class="back-link" type="button" data-view="recovery"><svg><use href="#i-back"/></svg>Recovery</button><h1 id="records-title">Health records</h1></div><button class="icon-btn" id="add-record" type="button" aria-label="Add record"><svg><use href="#i-plus"/></svg></button></header>
@@ -131,7 +159,7 @@
 
         <!-- SETTINGS -->
         <section id="view-settings" class="view" aria-labelledby="settings-title">
-          <header class="page-head"><div><button class="back-link" type="button" data-view="progress"><svg><use href="#i-back"/></svg>Progress</button><h1 id="settings-title">Settings</h1></div></header>
+          <header class="page-head"><div><button class="back-link" type="button" data-view="more"><svg><use href="#i-back"/></svg>More</button><h1 id="settings-title">Settings</h1></div></header>
           <article class="card prose-card">
             <h3>Garmin Personal API</h3>
             <p id="garmin-settings-status" class="muted">Checking Garmin status…</p>
@@ -145,7 +173,7 @@
           </article>
           <article class="card prose-card" id="calendar-settings">
             <h3>Calendars</h3>
-            <p>Read-only: Health Hub never changes these calendars. Events are treated as fixed when planning workouts. The link is stored only on this computer and never shown again in full.</p>
+            <p>Read-only: Compass never changes these calendars. Events are treated as fixed when planning workouts. The link is stored only on this computer and never shown again in full.</p>
             <div id="calendar-list" class="stack"></div>
             <form id="calendar-form" class="stack">
               <label>Name<input id="calendar-name" value="School" maxlength="60" required></label>
@@ -157,7 +185,7 @@
           </article>
           <article class="card prose-card">
             <h3>Reminders</h3>
-            <p>Notifications for your check-in, workout and Garmin's bedtime window. They fire while Health Hub is open or installed in this browser; true background reminders come with phone access.</p>
+            <p>Notifications for your check-in, workout and Garmin's bedtime window. They fire while Compass is open or installed in this browser; true background reminders come with phone access.</p>
             <form id="reminder-form" class="stack">
               <label class="toggle-row"><input id="reminder-enabled" type="checkbox"><span><b>Turn on reminders</b><small id="reminder-permission">Your browser will ask permission.</small></span></label>
               <div class="form-grid"><label>Check-in<input id="reminder-checkin" type="time"></label><label>Workout <span>optional</span><input id="reminder-workout" type="time"></label></div>
@@ -167,17 +195,17 @@
           </article>
           <article class="card prose-card">
             <h3>Private by design</h3>
-            <p>Health Hub runs against its local database. Garmin data stays on this server; no Garmin password is stored.</p>
+            <p>Compass runs against its local database. Garmin data stays on this server; no Garmin password is stored.</p>
             <button class="btn btn-primary" id="install-app" type="button" hidden>Install app</button>
           </article>
         </section>
       </main>
 
       <nav class="tabbar" aria-label="Main">
-        <button type="button" class="active" data-view="today"><svg><use href="#i-today"/></svg><span>Today</span></button>
-        <button type="button" data-view="recovery"><svg><use href="#i-recovery"/></svg><span>Recovery</span></button>
-        <button type="button" data-view="train"><svg><use href="#i-train"/></svg><span>Train</span></button>
-        <button type="button" data-view="progress"><svg><use href="#i-progress"/></svg><span>Progress</span></button>
+        <button type="button" class="active" data-view="today" data-tab="today"><svg><use href="#i-sun"/></svg><span>Today</span></button>
+        <button type="button" data-view="week" data-tab="week"><svg><use href="#i-week"/></svg><span>Week</span></button>
+        <button type="button" data-view="health" data-tab="health"><svg><use href="#i-heart"/></svg><span>Health</span></button>
+        <button type="button" data-view="more" data-tab="more"><svg><use href="#i-more"/></svg><span>More</span></button>
       </nav>
     </div>
 
@@ -230,16 +258,16 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-21-ui11" onerror="window.__healthHubBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=health-hub-2026-11-21-ui11"></script>
-    <script src="/static/schedule.js?v=health-hub-2026-11-21-ui11"></script>
-    <script src="/static/assistant.js?v=health-hub-2026-11-21-ui11"></script>
+    <script src="/static/app.js?v=compass-2026-11-22-ui12" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-22-ui12"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-22-ui12"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-22-ui12"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;
         const diagnostic = document.getElementById("startup-diagnostic");
         diagnostic.hidden = false;
-        diagnostic.textContent = "Health Hub's script started but did not finish initializing. Reload the page; if this stays, send a screenshot of this message.";
+        diagnostic.textContent = "Compass's script started but did not finish initializing. Reload the page; if this stays, send a screenshot of this message.";
       }, 1500);
     </script>
   </body>

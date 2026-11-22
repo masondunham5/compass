@@ -1,4 +1,4 @@
-"""Import past lifting sets from a CSV into Health Hub.
+"""Import past lifting sets from a CSV into Compass.
 
 CSV columns: date,workout,exercise,set,weight_lbs,reps,rpe,notes  (one row per set)
 

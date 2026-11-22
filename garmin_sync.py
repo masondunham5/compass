@@ -1,4 +1,4 @@
-"""Pull a private Garmin Connect Personal API snapshot into Health Hub.
+"""Pull a private Garmin Connect Personal API snapshot into Compass.
 
 Run manually first:
     .\\.venv\\Scripts\\python.exe garmin_sync.py --days 7
@@ -144,7 +144,7 @@ def _request(url: str, *, headers: dict[str, str], method: str = "GET") -> Any:
                 time.sleep(_backoff(attempt))
                 attempt += 1
                 continue
-            raise GarminFatalError("Health Hub could not reach Garmin. Check this computer’s internet connection.") from error
+            raise GarminFatalError("Compass could not reach Garmin. Check this computer’s internet connection.") from error
     if not body:
         return None
     try:
@@ -570,7 +570,7 @@ def rebuild_from_raw() -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sync private Garmin data into Health Hub.")
+    parser = argparse.ArgumentParser(description="Sync private Garmin data into Compass.")
     parser.add_argument("--days", type=int, default=int(os.getenv("GARMIN_SYNC_DAYS", "2")), help="Rolling days to refresh (1–30).")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild metric columns from stored raw responses without calling Garmin.")
     args = parser.parse_args()

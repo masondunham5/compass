@@ -166,7 +166,7 @@ def match_garmin_activities(db: sqlite3.Connection) -> int:
 
     A still-planned session is marked completed using Garmin's duration/HR, so a
     workout recorded on the watch and planned here appears once, not twice. A
-    session already completed in Health Hub is only linked. Activities with no
+    session already completed in Compass is only linked. Activities with no
     same-day, same-kind session stay as standalone history.
     """
     today = date.today().isoformat()

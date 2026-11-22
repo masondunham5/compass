@@ -5,7 +5,7 @@ function reportStartupIssue(detail) {
   const diagnostic = document.getElementById("startup-diagnostic");
   if (!diagnostic) return;
   diagnostic.hidden = false;
-  diagnostic.textContent = `Health Hub error: ${detail}`;
+  diagnostic.textContent = `Compass error: ${detail}`;
 }
 window.addEventListener("error", event => reportStartupIssue(`${event.message || "Unknown JavaScript error"}${event.lineno ? ` (line ${event.lineno})` : ""}`));
 window.addEventListener("unhandledrejection", event => reportStartupIssue(`Request failed: ${event.reason?.message || String(event.reason || "unknown")}`));
@@ -69,11 +69,17 @@ let installPrompt = null;
 let editingSessionId = null;
 let activePlan = null;
 
-const TAB_FOR_VIEW = { today: "today", recovery: "recovery", train: "train", workout: "train", progress: "progress", settings: "progress", records: "recovery" };
+// Top-level tabs: Today · Week · Health (Train / Recovery / Progress) · More.
+const TAB_FOR_VIEW = { today: "today", week: "week", train: "health", workout: "health", recovery: "health", progress: "health", records: "health", more: "more", settings: "more" };
+const HEALTH_VIEWS = ["train", "recovery", "progress"];
 
 function selectView(view) {
+  if (view === "health") view = state.healthView || "train";  // the Health tab reopens its last sub-tab
+  if (HEALTH_VIEWS.includes(view)) state.healthView = view;
   $$(".view").forEach(element => element.classList.toggle("active", element.id === `view-${view}`));
-  $$(".tabbar [data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === TAB_FOR_VIEW[view]));
+  $$(".tabbar [data-tab]").forEach(button => button.classList.toggle("active", button.dataset.tab === TAB_FOR_VIEW[view]));
+  $$(".subnav [data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === view));
+  if (view === "week" && window.renderWeek) window.renderWeek();
   if (view !== "workout") { state.returnView = view; holdScreenAwake(false); }
   window.scrollTo({ top: 0 });
 }
@@ -123,7 +129,8 @@ function planKicker(plan) {
 
 function renderToday() {
   const t = state.today;
-  $("#today-kicker").textContent = planKicker(t.plan);
+  const hour = new Date().getHours();
+  $("#today-kicker").textContent = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";  // assistant.js adds the day's count
   $("#today-title").textContent = fmtLong(t.today);
 
   $("#week-strip").innerHTML = t.week.map(day => {
@@ -406,7 +413,7 @@ function renderTrain() {
     : `<article class="card empty"><b>Nothing planned in the next two weeks</b>Build or adjust a block to schedule sessions.</article>`;
   bindSessionRows($("#train-plan"), sessions);
 
-  // History: Health Hub logs + Garmin activities
+  // History: Compass logs + Garmin activities
   const logged = (state.history?.sessions || []).map(session => ({ date: session.date, kind: "session", session }));
   // Garmin activities matched to a session are shown on that session's row, not twice.
   const garmin = (state.activities?.activities || []).filter(activity => !activity.linked_session_id).map(activity => ({ date: activity.activity_date, kind: "activity", activity }));
@@ -589,7 +596,7 @@ async function openSession(sessionId, options = {}) {
   const finish = $("#finish-session");
   if (finish) finish.onclick = async () => {
     finish.disabled = true;
-    await api(`/api/sessions/${encodeURIComponent(session.id)}/complete`, { method: "POST", body: JSON.stringify({ minutes, notes: options.cap ? `Short version: ${options.cap} sets per exercise` : "Logged in Health Hub", metrics: options.cap ? { capped_sets: options.cap } : {} }) });
+    await api(`/api/sessions/${encodeURIComponent(session.id)}/complete`, { method: "POST", body: JSON.stringify({ minutes, notes: options.cap ? `Short version: ${options.cap} sets per exercise` : "Logged in Compass", metrics: options.cap ? { capped_sets: options.cap } : {} }) });
     stopTimer(); state.fullSession = false; await load(); selectView(back);
   };
 }
@@ -803,7 +810,7 @@ function renderRaces() {
     const week = race.current_week;
     const status = week ? `Week ${week.index} of ${race.plan.summary.total_weeks} · ${week.phase} · ${week.miles} mi this week` : race.days_to_go < 0 ? "Finished" : `Plan starts ${fmtShort(race.plan.weeks[0].start)}`;
     return `<button type="button" class="card race-card" data-race="${esc(race.id)}"><div class="race-top"><h3>${esc(race.name)}</h3><span class="countdown">${race.days_to_go >= 0 ? `${race.days_to_go} days` : "Done"}</span></div><p>${esc(race.plan.distance_label)} · ${esc(fmtLong(race.race_date))}${race.plan.summary.goal ? ` · goal ${esc(race.plan.summary.goal)}` : ""}</p><p>${esc(status)}${race.applied_at ? "" : " · not on calendar yet"}</p></button>`;
-  }).join("") : `<article class="card empty"><b>No races yet</b>Plan a race and Health Hub builds the weeks between now and race day.</article>`;
+  }).join("") : `<article class="card empty"><b>No races yet</b>Plan a race and Compass builds the weeks between now and race day.</article>`;
   $$("#race-list [data-race]").forEach(card => card.onclick = () => openRaceSheet(races.find(race => race.id === card.dataset.race)));
 }
 
@@ -1100,6 +1107,12 @@ async function saveSessionEditor(event) {
 
 /* ---------------------------------------------------------------- wiring */
 
+// Health sub-tabs, shown under the heading of Train, Recovery and Progress.
+HEALTH_VIEWS.forEach(view => {
+  const head = $(`#view-${view} .page-head`);
+  head?.insertAdjacentHTML("afterend", `<div class="segmented subnav" role="tablist" aria-label="Health">${HEALTH_VIEWS.map(name =>
+    `<button type="button" role="tab" data-view="${name}" class="${name === view ? "active" : ""}">${name[0].toUpperCase()}${name.slice(1)}</button>`).join("")}</div>`);
+});
 $$("[data-view]").forEach(button => button.addEventListener("click", () => selectView(button.dataset.view)));
 $("#today-stats").onclick = () => selectView("recovery");
 $("#today-checkin").onclick = () => openDialog($("#health-dialog"));
@@ -1183,6 +1196,6 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/static/serv
 
 window.__healthHubBootState = "ready";
 load().catch(error => {
-  $("#today-title").textContent = "Can't reach Health Hub";
+  $("#today-title").textContent = "Can't reach Compass";
   $("#today-card").innerHTML = `<div class="empty-day"><p class="muted">${esc(error.message || "The server did not respond.")} Check that the app is running on this computer.</p></div>`;
 });
