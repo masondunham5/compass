@@ -150,10 +150,44 @@ def test_your_own_outlook_events_are_never_changed_by_sync(db):
         outlook.sync(db, transport=graph)
     assert not any(method in ("PATCH", "DELETE") and path.endswith("/p1") for method, path in graph.calls)
     assert [row[0] for row in db.execute("SELECT title FROM outlook_events")] == ["Dentist"]
-    # A Compass-tagged event Compass lost track of is still not read back as your own.
+    # A Compass-tagged event Compass has no link to (a duplicate) is deleted, never read as your own.
     graph.default_calendar.append({**graph.default_calendar[0], "id": "p2", "subject": "Study: stray", "categories": ["Compass"]})
-    outlook.sync(db, transport=graph)
+    assert outlook.sync(db, transport=graph)["deleted"] == 1
+    assert [e["id"] for e in graph.default_calendar] == ["p1"]
     assert [row[0] for row in db.execute("SELECT title FROM outlook_events")] == ["Dentist"]
+
+
+def test_overlapping_syncs_create_each_event_once(db, tmp_path):
+    import threading
+    graph = FakeGraph()
+    add_block(db, "b1", 1, 9 * 60, 10 * 60)
+    db.commit()
+
+    def run():
+        with core.connection() as other:  # like Sync now and the background sync, each with its own connection
+            outlook.sync(other, transport=graph)
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(graph.events) == 1
+
+
+def test_links_survive_a_failed_sync(db):
+    graph = FakeGraph()
+    add_block(db, "b1", 1, 9 * 60, 10 * 60)
+    add_block(db, "b2", 2, 9 * 60, 10 * 60)
+
+    def flaky(method, url, headers, body):
+        if "calendarView" in url:
+            return 401, b"{}"  # fails after both events were created
+        return graph(method, url, headers, body)
+    with pytest.raises(outlook.OutlookError):
+        outlook.sync(db, transport=flaky)
+    db.rollback()  # what the caller's `with` block does on an error
+    assert outlook.sync(db, transport=graph)["created"] == 0 and len(graph.events) == 2
 
 
 def test_errors_are_readable_and_never_contain_the_token(db):

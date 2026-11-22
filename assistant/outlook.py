@@ -306,9 +306,24 @@ def _stale(db: sqlite3.Connection, link_id: str, wanted: dict[str, Any], start: 
     return not db.execute("SELECT 1 FROM plan_blocks WHERE id = ?", (link_id,)).fetchone()
 
 
+_sync_lock = threading.Lock()
+
+
 def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date | None = None) -> dict[str, Any]:
     """Make your Calendar's Compass events match accepted plan blocks and your own events (yesterday
-    through three weeks out), then read the rest of the Calendar so its events count as busy time."""
+    through three weeks out), then read the rest of the Calendar so its events count as busy time.
+
+    Only one sync runs at a time (Sync now, the debounced sync after edits and the background loop
+    can overlap), and each one commits before letting the next in — even after an error — so a
+    created event's link is always visible to the next sync. Otherwise both would create it."""
+    with _sync_lock:
+        try:
+            return _sync(db, transport, today)
+        finally:
+            db.commit()
+
+
+def _sync(db: sqlite3.Connection, transport: Transport | None, today: date | None) -> dict[str, Any]:
     today = today or date.today()
     graph = Graph(_access_token(db), transport)
     _move_to_main(db, graph)
@@ -338,7 +353,7 @@ def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date
         db.execute("INSERT OR REPLACE INTO outlook_links (block_id, event_id, fingerprint, synced_at) VALUES (?, ?, ?, ?)", (block_id, created["id"], fingerprint, now))
         counts["created"] += 1
     linked = {row[0] for row in db.execute("SELECT event_id FROM outlook_links")}  # includes ones created just now
-    counts["read"] = pull_events(db, graph, today, skip=linked)
+    counts["read"], counts["deleted"] = pull_events(db, graph, today, skip=linked, counts=counts)
     _set(db, "outlook_last_sync", now)
     _set(db, "outlook_last_error", None)
     return counts
@@ -350,8 +365,11 @@ def _local(graph_time: dict[str, Any]) -> str:
     return moment.astimezone().replace(tzinfo=None).isoformat(timespec="minutes")
 
 
-def pull_events(db: sqlite3.Connection, graph: Graph, today: date, skip: set[str] | None = None) -> int:
-    """Cache your main Calendar (yesterday → READ_AHEAD days), minus Compass's own events, as busy time."""
+def pull_events(db: sqlite3.Connection, graph: Graph, today: date, skip: set[str] | None = None, counts: dict[str, int] | None = None) -> tuple[int, int]:
+    """Cache your main Calendar (yesterday → READ_AHEAD days), minus Compass's own events, as busy time.
+    A Compass-tagged event that isn't linked (a duplicate, or left over) is deleted.
+    Returns (events read, total deleted including `counts["deleted"]`)."""
+    deleted = (counts or {}).get("deleted", 0)
     start, end = today - timedelta(days=WINDOW_BACK), today + timedelta(days=READ_AHEAD)
     query = urllib.parse.urlencode({
         "startDateTime": f"{start.isoformat()}T00:00:00Z", "endDateTime": f"{end.isoformat()}T00:00:00Z",
@@ -364,7 +382,11 @@ def pull_events(db: sqlite3.Connection, graph: Graph, today: date, skip: set[str
             break
         _, data = graph.call("GET", url)
         for item in (data or {}).get("value", []):
-            if item.get("isCancelled") or item.get("id") in (skip or set()) or CATEGORY in (item.get("categories") or []):
+            if item.get("isCancelled") or item.get("id") in (skip or set()):
+                continue
+            if CATEGORY in (item.get("categories") or []):  # Compass made it but has no link to it
+                graph.call("DELETE", f"/me/events/{urllib.parse.quote(item['id'])}")
+                deleted += 1
                 continue
             if item.get("isAllDay"):
                 first, last = item["start"]["dateTime"][:10], item["end"]["dateTime"][:10]
@@ -377,7 +399,7 @@ def pull_events(db: sqlite3.Connection, graph: Graph, today: date, skip: set[str
         url = (data or {}).get("@odata.nextLink")
     db.execute("DELETE FROM outlook_events")
     db.executemany("INSERT OR REPLACE INTO outlook_events (id, title, start, end, all_day, busy, location, organizer, series) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    return len(rows)
+    return len(rows), deleted
 
 
 def events_between(db: sqlite3.Connection, start: date, end: date) -> list[dict[str, Any]]:
