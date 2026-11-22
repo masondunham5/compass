@@ -119,8 +119,17 @@ async function renderWeek(offset = weekStartOffset) {
   const today = asDate(state.today.today);
   const monday = new Date(today); monday.setDate(today.getDate() - ((today.getDay() + 6) % 7) + offset * 7);
   const start = monday.toISOString().slice(0, 10);
+  const end = new Date(monday.getTime() + 6 * 86400000).toISOString().slice(0, 10);
+  $("#week-kicker").textContent = offset === 0 ? "This week" : offset === 1 ? "Next week" : offset === -1 ? "Last week" : `Week of ${fmtShort(start).replace(/^\w+, /, "")}`;
+  $("#week-title").textContent = `${fmtShort(start).replace(/^\w+, /, "")} – ${fmtShort(end).replace(/^\w+, /, "")}`;
+  $("#week-prev").disabled = offset <= -4;
+  if (window.syncCalendarModeUI) window.syncCalendarModeUI();
+  if (window.calendarMode && window.calendarMode() !== "list") {  // Day / Week time grid (calendar.js)
+    await window.renderCalendar(start).catch(error => { $("#cal-grid").innerHTML = `<p class="note error">${esc(error.message)}</p>`; });
+    return;
+  }
+  if (window.renderTodos) window.renderTodos();
   const { days } = await api(`/api/assistant/week?start=${start}&days=7`);
-  const end = days[days.length - 1].date;
   $("#week-kicker").textContent = offset === 0 ? "This week" : offset === 1 ? "Next week" : offset === -1 ? "Last week" : `Week of ${fmtShort(start).replace(/^\w+, /, "")}`;
   $("#week-title").textContent = `${fmtShort(start).replace(/^\w+, /, "")} – ${fmtShort(end).replace(/^\w+, /, "")}`;
   $("#week-prev").disabled = offset <= -4;

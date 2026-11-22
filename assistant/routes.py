@@ -261,6 +261,200 @@ def unaccept_plan(payload: UnacceptRequest) -> dict[str, Any]:
     return {"removed": removed}
 
 
+# ---------------------------------------------------------------- calendar grid: everything, per day
+
+def _span(event: dict[str, Any], day: date) -> tuple[int, int]:
+    """An event's minutes within one day (clipped, so multi-day events show on each day)."""
+    from datetime import datetime
+    midnight = datetime.combine(day, datetime.min.time())
+    start = (datetime.fromisoformat(event["start"]) - midnight).total_seconds() // 60
+    end = (datetime.fromisoformat(event["end"]) - midnight).total_seconds() // 60
+    return int(max(0, start)), int(min(24 * 60, end))
+
+
+@router.get("/calendar")
+def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) -> dict[str, Any]:
+    """Every item for each day, ready for a time grid: calendar feeds, personal Outlook, your own
+    events, work shifts, accepted plan blocks, draft suggestions (today onward) and workouts."""
+    from assistant import planner
+    try:
+        first = date.fromisoformat(start) if start else date.today()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Use YYYY-MM-DD.") from error
+    days = max(1, min(days, 14))
+    last = first + timedelta(days=days - 1)
+    today = date.today()
+    with connection() as db:
+        plan = None
+        if drafts and last >= today:
+            plan_start = max(first, today)
+            plan = planner.build(db, plan_start, (last - plan_start).days + 1)
+        draft_blocks = [b for d in (plan or {}).get("days", []) for b in d["blocks"] if b["status"] == "draft"]
+        accepted = [dict(row) for row in db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (first.isoformat(), last.isoformat()))]
+        placed_sessions = {b["ref"] for b in accepted + draft_blocks if b["kind"] == "workout"}
+        sessions = _workouts(db, first, last)
+        out = []
+        for offset in range(days):
+            day = first + timedelta(days=offset)
+            iso = day.isoformat()
+            items = []
+            for event in availability.fixed_events(db, day):
+                a, b = _span(event, day)
+                if not event["all_day"] and b <= a:
+                    continue
+                source = {"mine": "mine", "outlook": "outlook", "work": "work"}.get(event.get("feed_kind"), "feed")
+                items.append({"id": f"{source}:{event.get('id') or event['title']}:{iso}:{a}", "source": source, "kind": event.get("feed_kind") or source,
+                              "title": event["title"], "all_day": event["all_day"], "start": a, "end": b, "busy": event.get("busy", True),
+                              "location": event.get("location") or "", "calendar": event.get("feed_name") or "",
+                              "event_id": event.get("event_id"), "occurrence": event.get("occurrence"), "repeat": event.get("repeat"),
+                              "notes": event.get("notes") or ""})
+            for block in [b for b in accepted if b["block_date"] == iso]:
+                items.append({"id": block["id"], "source": "plan", "kind": block["kind"], "title": block["title"], "all_day": False,
+                              "start": block["start"], "end": block["end"], "busy": True, "block": block})
+            for block in [b for b in draft_blocks if b["block_date"] == iso]:
+                clean = {k: v for k, v in block.items() if k not in ("status", "start_label", "end_label")}
+                items.append({"id": block["id"], "source": "draft", "kind": block["kind"], "title": block["title"], "all_day": False,
+                              "start": block["start"], "end": block["end"], "busy": False, "block": clean})
+            for session in [s for s in sessions if s["session_date"] == iso and s["id"] not in placed_sessions]:
+                items.append({"id": f"session:{session['id']}", "source": "session", "kind": session["kind"], "title": session["title"],
+                              "all_day": True, "start": 0, "end": 24 * 60, "busy": False, "session_id": session["id"], "status": session["status"],
+                              "minutes": session["minutes"]})
+            items.sort(key=lambda item: (not item["all_day"], item["start"], item["end"]))
+            out.append({"date": iso, "items": items})
+        return {"start": first.isoformat(), "days": out, "warnings": (plan or {}).get("warnings", []), "draft_count": len(draft_blocks)}
+
+
+# ---------------------------------------------------------------- your own events and to-dos
+
+class EventRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=120)
+    start_date: str | None = None
+    start: int | None = Field(default=None, ge=0, le=24 * 60)
+    end: int | None = Field(default=None, ge=0, le=24 * 60)
+    all_day: bool | None = None
+    repeat: str | None = None
+    repeat_until: str | None = None
+    location: str | None = Field(default=None, max_length=120)
+    notes: str | None = Field(default=None, max_length=1000)
+    busy: bool | None = None
+    scope: str = "all"            # for repeating events: one | future | all
+    occurrence: str | None = None  # the date that was tapped
+
+
+class TodoRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+    minutes: int | None = Field(default=None, ge=5, le=12 * 60)
+    due_date: str | None = None
+    due_time: str | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+    done: bool | None = None
+
+
+def _event_fields(payload: BaseModel) -> dict[str, Any]:
+    """Only the fields the client sent (so a PATCH that moves an event doesn't clear its other fields)."""
+    return payload.model_dump(exclude_unset=True, exclude={"scope", "occurrence"})
+
+
+@router.post("/events")
+def create_event(payload: EventRequest) -> dict[str, Any]:
+    from assistant import events, outlook
+    with connection() as db:
+        try:
+            event = events.add_event(db, _event_fields(payload))
+        except events.EventError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    outlook.sync_soon()
+    return {"event": event}
+
+
+@router.get("/events/{event_id}")
+def read_event(event_id: str) -> dict[str, Any]:
+    from assistant import events
+    with connection() as db:
+        try:
+            return {"event": events.get_event(db, event_id)}
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Event not found.") from error
+
+
+@router.patch("/events/{event_id}")
+def edit_event(event_id: str, payload: EventRequest) -> dict[str, Any]:
+    from assistant import events, outlook
+    if payload.scope not in ("one", "future", "all"):
+        raise HTTPException(status_code=400, detail="Unknown scope.")
+    with connection() as db:
+        try:
+            event = events.update_event(db, event_id, _event_fields(payload), payload.scope, payload.occurrence)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Event not found.") from error
+        except events.EventError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    outlook.sync_soon()
+    return {"event": event}
+
+
+@router.delete("/events/{event_id}")
+def remove_event(event_id: str, scope: str = "all", occurrence: str | None = None) -> dict[str, Any]:
+    from assistant import events, outlook
+    if scope not in ("one", "future", "all"):
+        raise HTTPException(status_code=400, detail="Unknown scope.")
+    with connection() as db:
+        try:
+            events.delete_event(db, event_id, scope, occurrence)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Event not found.") from error
+    outlook.sync_soon()
+    return {"deleted": True}
+
+
+@router.get("/todos")
+def todos(include_done: bool = False) -> dict[str, Any]:
+    from assistant import events
+    with connection() as db:
+        return {"todos": events.list_todos(db, include_done)}
+
+
+@router.post("/todos")
+def create_todo(payload: TodoRequest) -> dict[str, Any]:
+    from assistant import events
+    with connection() as db:
+        try:
+            events.add_todo(db, _event_fields(payload))
+        except events.EventError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"todos": events.list_todos(db)}
+
+
+@router.patch("/todos/{todo_id}")
+def edit_todo(todo_id: str, payload: TodoRequest) -> dict[str, Any]:
+    from assistant import events, outlook, planner
+    with connection() as db:
+        try:
+            events.update_todo(db, todo_id, _event_fields(payload))
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="To-do not found.") from error
+        except events.EventError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        changed = planner.cleanup(db)  # checking one off frees its upcoming blocks
+        result = {"todos": events.list_todos(db)}
+    if changed:
+        outlook.sync_soon()
+    return result
+
+
+@router.delete("/todos/{todo_id}")
+def remove_todo(todo_id: str) -> dict[str, Any]:
+    from assistant import events, outlook, planner
+    with connection() as db:
+        if not events.delete_todo(db, todo_id):
+            raise HTTPException(status_code=404, detail="To-do not found.")
+        changed = planner.cleanup(db)
+        result = {"todos": events.list_todos(db)}
+    if changed:
+        outlook.sync_soon()
+    return result
+
+
 # ---------------------------------------------------------------- personal Outlook (write-back)
 
 class OutlookConnect(BaseModel):

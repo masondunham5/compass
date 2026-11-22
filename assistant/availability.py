@@ -28,8 +28,8 @@ def _clock(minutes: int) -> str:
     return f"{(hour % 12) or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
 
 
-def _busy_blocks(events: list[dict[str, Any]], day: date) -> list[tuple[int, int]]:
-    """Merged busy intervals (minutes after midnight) for one day, clipped to the planning day."""
+def _busy_blocks(events: list[dict[str, Any]], day: date, lo: int = DAY_START, hi: int = DAY_END) -> list[tuple[int, int]]:
+    """Merged busy intervals (minutes after midnight) for one day, clipped to [lo, hi] (default: the planning day)."""
     blocks = []
     day_start = datetime.combine(day, datetime.min.time())
     for event in events:
@@ -41,7 +41,7 @@ def _busy_blocks(events: list[dict[str, Any]], day: date) -> list[tuple[int, int
             continue
         a = int((start - day_start).total_seconds() // 60)
         b = int((end - day_start).total_seconds() // 60)
-        a, b = max(a, DAY_START), min(b, DAY_END)
+        a, b = max(a, lo), min(b, hi)
         if b > a:
             blocks.append((a, b))
     blocks.sort()
@@ -75,23 +75,34 @@ def best_slot(slots: list[dict[str, Any]], minutes: int) -> dict[str, Any] | Non
     return {"start": _clock(start), "end": _clock(start + minutes), "start_minutes": start}
 
 
-def _fixed_items(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
-    """Work shifts and accepted plan blocks, shaped like calendar events so they count as busy."""
-    from assistant import work  # local import keeps module load order simple
-    items = []
+def fixed_events(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
+    """Everything that isn't the plan: school/ICS feeds, your personal Outlook, your own Compass
+    events and work shifts — all shaped like calendar events. The planner treats these as fixed."""
+    from assistant import events, outlook, work  # local imports keep module load order simple
+    items = events_between(db, day, day) + outlook.events_between(db, day, day) + events.occurrences(db, day, day)
     for shift in work.shifts_on(db, day):
         items.append({"title": shift["title"], "start": f"{day.isoformat()}T{shift['start']}", "end": f"{day.isoformat()}T{shift['end']}",
                       "all_day": False, "busy": True, "location": "", "feed_name": "Work", "feed_kind": "work", "fixed": True})
-    if db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plan_blocks'").fetchone():
-        for block in db.execute("SELECT * FROM plan_blocks WHERE block_date = ? ORDER BY start", (day.isoformat(),)):
-            start, end = divmod(block["start"], 60), divmod(block["end"], 60)
-            items.append({"title": block["title"], "start": f"{day.isoformat()}T{start[0]:02d}:{start[1]:02d}", "end": f"{day.isoformat()}T{end[0]:02d}:{end[1]:02d}",
-                          "all_day": False, "busy": True, "location": "", "feed_name": "Plan", "feed_kind": f"plan-{block['kind']}", "fixed": False})
     return items
 
 
+def plan_items(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
+    """Accepted plan blocks for one day, shaped like calendar events so they count as busy."""
+    items = []
+    for block in db.execute("SELECT * FROM plan_blocks WHERE block_date = ? ORDER BY start", (day.isoformat(),)):
+        start, end = divmod(block["start"], 60), divmod(block["end"], 60)
+        items.append({"title": block["title"], "start": f"{day.isoformat()}T{start[0]:02d}:{start[1]:02d}", "end": f"{day.isoformat()}T{end[0]:02d}:{end[1]:02d}",
+                      "all_day": False, "busy": True, "location": "", "feed_name": "Plan", "feed_kind": f"plan-{block['kind']}", "fixed": False})
+    return items
+
+
+def has_calendar(db: sqlite3.Connection) -> bool:
+    return any(db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+               for table in ("calendar_feeds", "work_shifts", "plan_blocks", "my_events", "outlook_events"))
+
+
 def day_summary(db: sqlite3.Connection, day: date, workout_minutes: int = 60) -> dict[str, Any]:
-    events = sorted(events_between(db, day, day) + _fixed_items(db, day), key=lambda e: (not e["all_day"], e["start"]))
+    events = sorted(fixed_events(db, day) + plan_items(db, day), key=lambda e: (not e["all_day"], e["start"]))
     blocks = _busy_blocks(events, day)
     busy = sum(b - a for a, b in blocks)
     exams = [event["title"] for event in events if EXAM_WORDS.search(event["title"]) and not str(event.get("feed_kind", "")).startswith("plan")]
@@ -100,8 +111,7 @@ def day_summary(db: sqlite3.Connection, day: date, workout_minutes: int = 60) ->
         "date": day.isoformat(), "busy_minutes": busy, "events": events, "exams": exams,
         "heavy": busy >= HEAVY_BUSY_MINUTES or bool(exams), "free_slots": slots,
         "best_slot": best_slot(slots, workout_minutes),
-        "has_calendar": bool(db.execute("SELECT 1 FROM calendar_feeds LIMIT 1").fetchone() or db.execute("SELECT 1 FROM work_shifts LIMIT 1").fetchone()
-                             or db.execute("SELECT 1 FROM plan_blocks LIMIT 1").fetchone()),
+        "has_calendar": has_calendar(db),
     }
 
 

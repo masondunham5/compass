@@ -31,6 +31,7 @@ class FakeGraph:
         self.events: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
         self.counter = 0
+        self.default_calendar: list[dict] = []  # your normal Outlook calendar (read-only for Compass)
 
     def __call__(self, method, url, headers, body):
         assert headers["Authorization"] == "Bearer test-token"
@@ -38,6 +39,8 @@ class FakeGraph:
         self.calls.append((method, path))
         payload = json.loads(body) if body else None
         parts = path.strip("/").split("/")
+        if parts == ["me", "calendarView"] and method == "GET":
+            return 200, json.dumps({"value": self.default_calendar}).encode()
         if parts[:2] == ["me", "calendars"]:
             if len(parts) == 2 and method == "GET":
                 return 200, json.dumps({"value": [{"id": i, "name": n} for i, n in self.calendars.items()]}).encode()
@@ -93,16 +96,16 @@ def test_sync_creates_calendar_and_events_then_updates_and_deletes(db):
     add_block(db, "b2", 2, 17 * 60, 18 * 60, kind="workout", title="Legs")
     add_block(db, "far", 40, 9 * 60, 10 * 60)  # outside the 3-week window
     first = outlook.sync(db, transport=graph)
-    assert first == {"created": 2, "updated": 0, "deleted": 0, "unchanged": 0}
+    assert first == {"created": 2, "updated": 0, "deleted": 0, "unchanged": 0, "read": 0}
     assert list(graph.calendars.values()) == ["Compass"]
     subjects = sorted(e["subject"] for e in graph.events.values())
     assert subjects == ["Study: CSE 231: Project 07", "Workout: Legs"]
     assert all(e["calendar"] == "cal1" and e["start"]["timeZone"] == "UTC" for e in graph.events.values())
 
-    assert outlook.sync(db, transport=graph) == {"created": 0, "updated": 0, "deleted": 0, "unchanged": 2}
+    assert outlook.sync(db, transport=graph) == {"created": 0, "updated": 0, "deleted": 0, "unchanged": 2, "read": 0}
     db.execute("UPDATE plan_blocks SET start = ?, end = ? WHERE id = 'b1'", (11 * 60, 12 * 60))
     db.execute("DELETE FROM plan_blocks WHERE id = 'b2'")
-    assert outlook.sync(db, transport=graph) == {"created": 0, "updated": 1, "deleted": 1, "unchanged": 0}
+    assert outlook.sync(db, transport=graph) == {"created": 0, "updated": 1, "deleted": 1, "unchanged": 0, "read": 0}
     assert len(graph.events) == 1
 
 

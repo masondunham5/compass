@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui16">
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui17">
     <title>Compass</title>
   </head>
   <body>
@@ -132,8 +132,18 @@
             <div><p class="kicker" id="week-kicker">&nbsp;</p><h1 id="week-title">Week</h1></div>
             <div class="week-nav"><button type="button" class="icon-btn small" id="week-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><button type="button" class="icon-btn small" id="week-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div>
           </header>
+          <div class="cal-toolbar">
+            <div class="segmented small" id="cal-mode" role="tablist" aria-label="Calendar view"><button type="button" data-mode="day">Day</button><button type="button" data-mode="week">Week</button><button type="button" data-mode="list">List</button></div>
+            <button class="btn btn-primary small" type="button" id="cal-add">+ Add</button>
+          </div>
+          <div id="cal-strip" class="cal-strip" hidden></div>
           <div id="plan-summary" class="plan-summary"></div>
+          <div id="cal-grid" hidden></div>
+          <div id="cal-legend" class="cal-legend" hidden></div>
           <div id="week-days" class="stack"></div>
+          <div class="todo-head"><h2 class="section-title">To-dos</h2><button class="btn btn-ghost small" type="button" id="todo-add">+ To-do</button></div>
+          <p class="faint" id="todo-hint">Give each one a time estimate; the plan finds time for it.</p>
+          <article class="card list-card" id="todo-list"></article>
           <button class="btn btn-ghost full" type="button" id="week-push" style="margin-top:14px">Push training back…</button>
         </section>
 
@@ -149,7 +159,7 @@
             <a class="row-item" href="/api/health/report/doctor" target="_blank" rel="noopener"><div class="grow"><b>Doctor summary</b><small>One page for appointments</small></div><svg><use href="#i-chevron"/></svg></a>
             <button type="button" class="row-item" data-view="settings"><div class="grow"><b>Settings</b><small>Garmin, bodyweight, reminders, install</small></div><svg><use href="#i-chevron"/></svg></button>
           </article>
-          <p class="faint" style="margin-top:16px">Coming next: tasks and school deadlines, writing your plan into your personal Outlook, and an assistant you can ask to rearrange your week.</p>
+          <p class="faint" style="margin-top:16px">Coming next: drag blocks to move them, missed blocks that reschedule themselves, and quick add (&ldquo;dentist thu 3pm&rdquo;).</p>
         </section>
 
         <!-- SCHOOL (read-only from School To Do) -->
@@ -250,6 +260,7 @@
 
     <!-- Session sheet: details + actions for one planned session -->
     <dialog id="session-sheet" class="sheet"><div id="session-sheet-body"></div></dialog>
+    <dialog id="cal-sheet" class="sheet"><div id="cal-sheet-body"></div></dialog>
 
     <!-- Exercise catalog: search, filter by muscle group, pick -->
     <dialog id="catalog-sheet" class="sheet"><div><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker" id="catalog-kicker">Add exercise</p><h2>Exercise catalog</h2><input id="catalog-search" type="search" placeholder="Search: bench, curl, cable, legs…" autocomplete="off" enterkeyhint="search"><div class="chip-row" id="catalog-groups"></div><div class="card list-card catalog-results" id="catalog-results"></div></div></dialog>
@@ -297,11 +308,12 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__compassBootState = "loading";</script>
-    <script src="/static/app.js?v=compass-2026-11-22-ui16" onerror="window.__compassBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=compass-2026-11-22-ui16"></script>
-    <script src="/static/schedule.js?v=compass-2026-11-22-ui16"></script>
-    <script src="/static/assistant.js?v=compass-2026-11-22-ui16"></script>
-    <script src="/static/planner.js?v=compass-2026-11-22-ui16"></script>
+    <script src="/static/app.js?v=compass-2026-11-22-ui17" onerror="window.__compassBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-22-ui17"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-22-ui17"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-22-ui17"></script>
+    <script src="/static/planner.js?v=compass-2026-11-22-ui17"></script>
+    <script src="/static/calendar.js?v=compass-2026-11-22-ui17"></script>
     <script>
       setTimeout(() => {
         if (window.__compassBootState === "ready" || window.__compassBootState.startsWith("failed:")) return;

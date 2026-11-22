@@ -6,8 +6,11 @@
   Calendars.ReadWrite + User.Read and "Allow public client flows" enabled.
 - The token cache is stored in data/outlook_token.bin, encrypted with Windows DPAPI (only this
   Windows user on this computer can read it). data/ is never committed.
-- Sync is one-way and only ever touches the "Compass" calendar it created: events for blocks
-  that no longer exist are deleted; edits made in Outlook are overwritten on the next sync.
+- Writing only ever touches the "Compass" calendar it created (accepted plan blocks and your own
+  Compass events): events that no longer exist in Compass are deleted; edits made in Outlook are
+  overwritten on the next sync.
+- Reading: events in your *default* Outlook calendar (things you add on your phone) are cached in
+  `outlook_events` and count as busy time for the planner. Compass never changes them.
 """
 
 from __future__ import annotations
@@ -33,7 +36,8 @@ AUTHORITY = "https://login.microsoftonline.com/consumers"
 SCOPES = ["Calendars.ReadWrite", "User.Read"]
 CALENDAR_NAME = "Compass"
 WINDOW_BACK, WINDOW_AHEAD = 1, 21
-KIND_LABEL = {"study": "Study", "review": "Review", "workout": "Workout"}
+READ_AHEAD = 60  # days of your Outlook calendar cached as busy time
+KIND_LABEL = {"study": "Study", "review": "Review", "workout": "Workout", "task": "To-do"}
 
 
 class OutlookError(RuntimeError):
@@ -41,10 +45,15 @@ class OutlookError(RuntimeError):
 
 
 def ensure_schema(db: sqlite3.Connection) -> None:
-    db.execute(
+    db.executescript(
         """CREATE TABLE IF NOT EXISTS outlook_links (
                block_id TEXT PRIMARY KEY, event_id TEXT NOT NULL, fingerprint TEXT NOT NULL, synced_at TEXT NOT NULL
-           )"""
+           );
+           CREATE TABLE IF NOT EXISTS outlook_events (
+               id TEXT PRIMARY KEY, title TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
+               all_day INTEGER NOT NULL DEFAULT 0, busy INTEGER NOT NULL DEFAULT 1, location TEXT NOT NULL DEFAULT ''
+           );
+           CREATE INDEX IF NOT EXISTS outlook_events_start ON outlook_events (start);"""
     )
 
 
@@ -223,18 +232,37 @@ def _utc(block_date: str, minutes: int) -> str:
     return local.astimezone().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+NOTE = "Planned in Compass. Change or remove it in Compass — edits made here are overwritten on the next sync."
+
+
 def event_for(block: dict[str, Any]) -> dict[str, Any]:
     return {
         "subject": f"{KIND_LABEL.get(block['kind'], 'Plan')}: {block['title']}",
         "start": {"dateTime": _utc(block["block_date"], block["start"]), "timeZone": "UTC"},
         "end": {"dateTime": _utc(block["block_date"], block["end"]), "timeZone": "UTC"},
-        "body": {"contentType": "text", "content": "Planned in Compass. Change or remove it in Compass — edits made here are overwritten on the next sync."},
+        "body": {"contentType": "text", "content": NOTE},
         "showAs": "busy", "isReminderOn": True, "reminderMinutesBeforeStart": 10,
     }
 
 
+def event_for_mine(occurrence: dict[str, Any]) -> dict[str, Any]:
+    """One occurrence of your own Compass event (each occurrence is its own Outlook event)."""
+    day = occurrence["occurrence"]
+    if occurrence["all_day"]:
+        nxt = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        start, end, extra = {"dateTime": f"{day}T00:00:00", "timeZone": "UTC"}, {"dateTime": f"{nxt}T00:00:00", "timeZone": "UTC"}, {"isAllDay": True, "isReminderOn": False}
+    else:
+        start = {"dateTime": _utc(day, occurrence["start_minutes"]), "timeZone": "UTC"}
+        end = {"dateTime": _utc(day, occurrence["end_minutes"]), "timeZone": "UTC"}
+        extra = {"isAllDay": False, "isReminderOn": True, "reminderMinutesBeforeStart": 15}
+    content = f"{occurrence['notes']}\n\n{NOTE}".strip() if occurrence.get("notes") else NOTE
+    return {"subject": occurrence["title"], "start": start, "end": end, "body": {"contentType": "text", "content": content},
+            "location": {"displayName": occurrence.get("location") or ""}, "showAs": "busy" if occurrence["busy"] else "free", **extra}
+
+
 def _fingerprint(event: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps([event["subject"], event["start"], event["end"]], sort_keys=True).encode()).hexdigest()[:16]
+    keys = [event["subject"], event["start"], event["end"], event.get("showAs"), event.get("location"), event.get("isAllDay"), event["body"]["content"]]
+    return hashlib.sha256(json.dumps(keys, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def _calendar_id(db: sqlite3.Connection, graph: Graph) -> str:
@@ -253,24 +281,41 @@ def _calendar_id(db: sqlite3.Connection, graph: Graph) -> str:
     return found
 
 
+def _wanted(db: sqlite3.Connection, start: date, end: date) -> dict[str, dict[str, Any]]:
+    """Every Outlook event the Compass calendar should hold in the window, keyed by link id."""
+    from assistant import events  # local import: events doesn't depend on outlook
+    rows = db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat()))
+    wanted = {row["id"]: event_for(dict(row)) for row in rows}
+    wanted.update({occ["id"]: event_for_mine(occ) for occ in events.occurrences(db, start, end)})
+    return wanted
+
+
+def _stale(db: sqlite3.Connection, link_id: str, wanted: dict[str, Any], start: date) -> bool:
+    """A linked Outlook event whose Compass item is gone. Past occurrences of your own events are left alone."""
+    if link_id in wanted:
+        return False
+    if link_id.startswith("mine:"):
+        return link_id.rsplit(":", 1)[-1] >= start.isoformat()
+    return not db.execute("SELECT 1 FROM plan_blocks WHERE id = ?", (link_id,)).fetchone()
+
+
 def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date | None = None) -> dict[str, Any]:
-    """Make the Compass calendar match accepted plan blocks from yesterday through three weeks out."""
+    """Make the Compass calendar match accepted plan blocks and your own events (yesterday through
+    three weeks out), then read your default Outlook calendar so its events count as busy time."""
     today = today or date.today()
     graph = Graph(_access_token(db), transport)
     calendar = _calendar_id(db, graph)
-    start, end = (today - timedelta(days=WINDOW_BACK)).isoformat(), (today + timedelta(days=WINDOW_AHEAD)).isoformat()
-    blocks = {row["id"]: dict(row) for row in db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (start, end))}
+    start, end = today - timedelta(days=WINDOW_BACK), today + timedelta(days=WINDOW_AHEAD)
+    wanted = _wanted(db, start, end)
     links = {row["block_id"]: dict(row) for row in db.execute("SELECT * FROM outlook_links")}
-    all_blocks = {row[0] for row in db.execute("SELECT id FROM plan_blocks")}
     now = datetime.now().astimezone().isoformat(timespec="seconds")
-    counts = {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0}
-    for block_id, link in links.items():  # removed in Compass -> remove from Outlook
-        if block_id not in all_blocks:
+    counts = {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0, "read": 0}
+    for link_id, link in links.items():  # removed in Compass -> remove from Outlook
+        if _stale(db, link_id, wanted, start):
             graph.call("DELETE", f"/me/events/{urllib.parse.quote(link['event_id'])}")
-            db.execute("DELETE FROM outlook_links WHERE block_id = ?", (block_id,))
+            db.execute("DELETE FROM outlook_links WHERE block_id = ?", (link_id,))
             counts["deleted"] += 1
-    for block_id, block in blocks.items():
-        event = event_for(block)
+    for block_id, event in wanted.items():
         fingerprint = _fingerprint(event)
         link = links.get(block_id)
         if link and link["fingerprint"] == fingerprint:
@@ -285,9 +330,53 @@ def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date
         _, created = graph.call("POST", f"/me/calendars/{urllib.parse.quote(calendar)}/events", event)
         db.execute("INSERT OR REPLACE INTO outlook_links (block_id, event_id, fingerprint, synced_at) VALUES (?, ?, ?, ?)", (block_id, created["id"], fingerprint, now))
         counts["created"] += 1
+    counts["read"] = pull_events(db, graph, today, skip={link["event_id"] for link in links.values()})
     _set(db, "outlook_last_sync", now)
     _set(db, "outlook_last_error", None)
     return counts
+
+
+def _local(graph_time: dict[str, Any]) -> str:
+    """Graph returns UTC wall time like '2026-11-23T15:00:00.0000000' → local 'YYYY-MM-DDTHH:MM'."""
+    moment = datetime.strptime(graph_time["dateTime"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    return moment.astimezone().replace(tzinfo=None).isoformat(timespec="minutes")
+
+
+def pull_events(db: sqlite3.Connection, graph: Graph, today: date, skip: set[str] | None = None) -> int:
+    """Cache your default Outlook calendar (yesterday → READ_AHEAD days) as busy time. Read-only."""
+    start, end = today - timedelta(days=WINDOW_BACK), today + timedelta(days=READ_AHEAD)
+    query = urllib.parse.urlencode({
+        "startDateTime": f"{start.isoformat()}T00:00:00Z", "endDateTime": f"{end.isoformat()}T00:00:00Z",
+        "$select": "id,subject,start,end,isAllDay,showAs,location,isCancelled", "$top": "250", "$orderby": "start/dateTime",
+    })
+    url: str | None = f"/me/calendarView?{query}"
+    rows = []
+    for _ in range(20):  # page limit
+        if not url:
+            break
+        _, data = graph.call("GET", url)
+        for item in (data or {}).get("value", []):
+            if item.get("isCancelled") or item.get("id") in (skip or set()):
+                continue
+            if item.get("isAllDay"):
+                first, last = item["start"]["dateTime"][:10], item["end"]["dateTime"][:10]
+                begin, finish = f"{first}T00:00", f"{last}T00:00"
+            else:
+                begin, finish = _local(item["start"]), _local(item["end"])
+            rows.append((item["id"], (item.get("subject") or "Busy")[:200], begin, finish, int(bool(item.get("isAllDay"))),
+                         int(item.get("showAs", "busy") not in ("free",)), ((item.get("location") or {}).get("displayName") or "")[:120]))
+        url = (data or {}).get("@odata.nextLink")
+    db.execute("DELETE FROM outlook_events")
+    db.executemany("INSERT OR REPLACE INTO outlook_events (id, title, start, end, all_day, busy, location) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    return len(rows)
+
+
+def events_between(db: sqlite3.Connection, start: date, end: date) -> list[dict[str, Any]]:
+    """Cached personal-Outlook events overlapping [start, end], shaped like calendar feed events."""
+    rows = db.execute("SELECT * FROM outlook_events WHERE start < ? AND end > ? ORDER BY all_day DESC, start",
+                      (f"{(end + timedelta(days=1)).isoformat()}T00:00", f"{start.isoformat()}T00:00")).fetchall()
+    return [{**dict(row), "all_day": bool(row["all_day"]), "busy": bool(row["busy"]), "feed_name": "Outlook", "feed_kind": "outlook", "fixed": True}
+            for row in rows]
 
 
 def status(db: sqlite3.Connection) -> dict[str, Any]:

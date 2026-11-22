@@ -225,7 +225,9 @@ def initialize() -> None:
         ensure_work_schema(db)
         ensure_plan_schema(db)
         from assistant.outlook import ensure_schema as ensure_outlook_schema
+        from assistant.events import ensure_schema as ensure_events_schema
         ensure_outlook_schema(db)
+        ensure_events_schema(db)
         apply_exercise_aliases(db)
 
 

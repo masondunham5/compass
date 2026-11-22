@@ -8,6 +8,8 @@ Flexible, placed in this order:
   3. Schoolwork — open School To Do tasks, earliest deadline first, split into blocks of
      30–90 minutes, spread across days, aiming to finish a day early (falling back to the
      due day if needed), with a daily study cap so nothing gets crammed.
+  4. Personal to-dos — deadline first, then undated ones oldest first, one block per day where
+     possible, with their own daily cap.
 
 The result is a draft: nothing is saved until you accept blocks. Accepted blocks are stored
 and treated as fixed the next time the draft is built.
@@ -20,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from assistant import availability, calendars, school, work
+from assistant import availability, events, school, work
 
 SETTINGS = {
     "day_start": 7 * 60,        # earliest block
@@ -29,6 +31,7 @@ SETTINGS = {
     "daily_study_cap": 240,     # minutes of schoolwork per day
     "study_start": 9 * 60,      # study blocks don't start before this
     "review_blocks": 2, "review_minutes": 60,
+    "daily_task_cap": 120,      # minutes of personal to-dos per day
 }
 WORKOUT_WINDOW = (15 * 60, 20 * 60)
 
@@ -63,6 +66,7 @@ class Day:
     busy: list[tuple[int, int]]
     open_from: int
     study_minutes: int = 0
+    task_minutes: int = 0
 
     def free(self, gap: int) -> list[tuple[int, int]]:
         """Free intervals between open_from and day end, keeping `gap` minutes around busy blocks."""
@@ -88,9 +92,8 @@ def _build_days(db: sqlite3.Connection, start: date, days: int, now: datetime, a
     out = {}
     for offset in range(days):
         day = start + timedelta(days=offset)
-        events = calendars.events_between(db, day, day)
-        busy = list(availability._busy_blocks(events, day))
-        busy += [(_minutes(s["start"]), _minutes(s["end"])) for s in work.shifts_on(db, day)]
+        # Fixed: school/ICS feeds, personal Outlook, your own events, work shifts — then accepted blocks.
+        busy = list(availability._busy_blocks(availability.fixed_events(db, day), day, 0, 24 * 60))
         busy += [(b["start"], b["end"]) for b in accepted if b["block_date"] == day.isoformat()]
         open_from = SETTINGS["day_start"]
         if day == now.date():
@@ -151,10 +154,15 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
     # Already-accepted study time counts toward each task.
     done_minutes: dict[str, int] = {}
     for block in accepted:
-        if block["kind"] in ("study", "review"):
+        if block["kind"] in ("study", "review", "task"):
             done_minutes[block["ref"]] = done_minutes.get(block["ref"], 0) + block["end"] - block["start"]
+    # Accepted blocks outside the window still count toward their task.
+    for row in db.execute("SELECT ref, SUM(end - start) FROM plan_blocks WHERE kind IN ('study', 'review', 'task') AND (block_date < ? OR block_date > ?) GROUP BY ref",
+                          (start.isoformat(), horizon_end.isoformat())):
+        done_minutes[row[0]] = done_minutes.get(row[0], 0) + row[1]
     for day in plan_days.values():
         day.study_minutes = sum(b["end"] - b["start"] for b in accepted if b["block_date"] == day.date.isoformat() and b["kind"] in ("study", "review"))
+        day.task_minutes = sum(b["end"] - b["start"] for b in accepted if b["block_date"] == day.date.isoformat() and b["kind"] == "task")
 
     try:
         tasks = school.load_tasks()
@@ -228,6 +236,44 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
         if remaining > 0 and due_day <= horizon_end:  # later deadlines get more days in a future draft
             warnings.append(f"Couldn't fit {remaining} min of {label} before it's due ({task.due.strftime('%a %b %d, %I:%M %p').replace(' 0', ' ')}).")
 
+    # 4. Personal to-dos: deadline first, then undated (oldest first).
+    def todo_due(todo: dict[str, Any]) -> datetime | None:
+        if not todo["due_date"]:
+            return None
+        return datetime.strptime(f"{todo['due_date']} {todo['due_time'] or '23:59'}", "%Y-%m-%d %H:%M")
+
+    todos = events.open_todos(db)
+    todos.sort(key=lambda t: (t["due_date"] is None, todo_due(t) or datetime.max, t["created_at"]))
+    for todo in todos:
+        remaining = todo["minutes"] - done_minutes.get(todo["id"], 0)
+        if remaining <= 0:
+            continue
+        due = todo_due(todo)
+        if due and due.date() > horizon_end + timedelta(days=7):
+            continue  # far-off deadline: a later draft handles it
+        last_day = due.date() if due and due >= now else horizon_end
+        for spread in (True, False):
+            for day in sorted(plan_days.values(), key=lambda d: d.date):
+                if remaining <= 0 or day.date > last_day:
+                    break
+                while remaining > 0 and day.task_minutes < SETTINGS["daily_task_cap"]:
+                    chunk = min(remaining, SETTINGS["max_block"], SETTINGS["daily_task_cap"] - day.task_minutes)
+                    if chunk < min(SETTINGS["min_block"], remaining):
+                        break
+                    latest = due.hour * 60 + due.minute if due and day.date == due.date() and due >= now else None
+                    slot = _place(day, chunk, latest_end=latest, earliest=SETTINGS["study_start"])
+                    if slot is None:
+                        break
+                    add(day, slot, chunk, "task", todo["id"], todo["title"])
+                    day.task_minutes += chunk
+                    remaining -= chunk
+                    if spread:
+                        break
+            if remaining <= 0:
+                break
+        if remaining > 0 and due and due.date() <= horizon_end:
+            warnings.append(f"Couldn't fit {remaining} min of “{todo['title']}” before it's due ({due.strftime('%a %b %d')}).")
+
     blocks = [{**b, "status": "accepted"} for b in accepted] + [{**b, "status": "draft"} for b in drafts]
     for block in blocks:
         block["start_label"], block["end_label"] = clock(block["start"]), clock(block["end"])
@@ -265,7 +311,7 @@ def accept(db: sqlite3.Connection, blocks: list[dict[str, Any]]) -> int:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     saved = 0
     for block in blocks:
-        if block.get("kind") not in {"study", "review", "workout"}:
+        if block.get("kind") not in {"study", "review", "workout", "task"}:
             raise ValueError("unknown block kind")
         start, end = int(block["start"]), int(block["end"])
         if not (0 <= start < end <= 24 * 60):
@@ -284,9 +330,18 @@ def unaccept(db: sqlite3.Connection, block_id: str | None = None, from_date: str
     return db.execute("DELETE FROM plan_blocks WHERE block_date >= ?", (from_date or date.today().isoformat(),)).rowcount
 
 
-def cleanup(db: sqlite3.Connection) -> int:
-    """Drop accepted workout blocks whose session moved to another day or is no longer planned."""
-    return db.execute(
+def cleanup(db: sqlite3.Connection, today: date | None = None) -> int:
+    """Drop accepted workout blocks whose session moved to another day or is no longer planned,
+    and upcoming to-do blocks whose to-do was deleted or checked off (past ones stay as history)."""
+    today_iso = (today or date.today()).isoformat()
+    removed = db.execute(
         """DELETE FROM plan_blocks WHERE kind = 'workout' AND NOT EXISTS (
                SELECT 1 FROM sessions s WHERE s.id = plan_blocks.ref AND s.session_date = plan_blocks.block_date)"""
     ).rowcount
+    removed += db.execute(
+        """DELETE FROM plan_blocks WHERE kind = 'task' AND (
+               NOT EXISTS (SELECT 1 FROM todos t WHERE t.id = plan_blocks.ref)
+               OR (block_date >= ? AND EXISTS (SELECT 1 FROM todos t WHERE t.id = plan_blocks.ref AND t.done = 1)))""",
+        (today_iso,),
+    ).rowcount
+    return removed
