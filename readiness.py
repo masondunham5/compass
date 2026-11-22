@@ -53,7 +53,7 @@ def mean_metric(rows: list[dict[str, Any]], key: str) -> float | None:
 
 def deterministic_training_recommendation(
     sessions: list[dict[str, Any]], daily_metrics: list[dict[str, Any]], manual_health: dict[str, Any] | None = None,
-    recent_training_days: int = 0,
+    recent_training_days: int = 0, illness_warning: bool = False, load_ratio: float | None = None,
 ) -> dict[str, Any]:
     """Explainable rule engine. It never writes, moves, or cancels a session."""
     today = date.today().isoformat()
@@ -100,6 +100,10 @@ def deterministic_training_recommendation(
         score -= 12; reasons.append(f"Body Battery was only {round(float(wake_battery))} at wake."); headlines.append(f"Body Battery woke at {round(float(wake_battery))}.")
     elif wake_battery is not None and float(wake_battery) < 40:
         score -= 6; reasons.append(f"Body Battery was {round(float(wake_battery))} at wake (below 40).")
+    if illness_warning:
+        score -= 25; reasons.append("Resting HR, HRV, and breathing rate show a possible-illness pattern for 2+ days."); headlines.append("Your body may be fighting something.")
+    if load_ratio is not None and load_ratio > 1.5:
+        score -= 10; reasons.append(f"Training load this week is {load_ratio}× your 4-week norm."); headlines.append("Training load has spiked.")
     if recent_training_days >= 3:
         score -= 5; reasons.append("You trained each of the last 3 days."); headlines.append("Three training days in a row.")
     if current and baseline_rhr and current.get("resting_hr") is not None and float(current["resting_hr"]) >= baseline_rhr * 1.08:

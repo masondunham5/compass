@@ -306,6 +306,10 @@ METRIC_FIELDS: list[Field] = [
     ("sleep_stress_avg", "REAL", "sleep", ("avgSleepStress",), _number),
     ("sleep_avg_hr", "REAL", "sleep", ("avgHeartRate",), _number),
     ("sleep_need_minutes", "INTEGER", "sleep", ("sleepNeed.actual",), _number),
+    # Garmin's sleep coach for the coming night (minutes after midnight; 1400 = 11:20 PM).
+    ("next_sleep_need_minutes", "INTEGER", "sleep", ("nextSleepNeed.actual",), _number),
+    ("next_bedtime_start_mins", "INTEGER", "sleep", ("nextSleepNeed.recommendedBedtimeStartMins",), _number),
+    ("next_bedtime_end_mins", "INTEGER", "sleep", ("nextSleepNeed.recommendedBedtimeEndMins",), _number),
     ("nap_seconds", "INTEGER", "sleep", ("napTimeSeconds",), _number),
     ("body_battery_during_sleep", "INTEGER", "summary", ("bodyBatteryDuringSleep",), _number),
     ("body_battery_at_wake", "INTEGER", "summary", ("bodyBatteryAtWakeTime",), _number),

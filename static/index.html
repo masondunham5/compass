@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui8">
+    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui9">
     <title>Health Hub</title>
   </head>
   <body>
@@ -35,10 +35,13 @@
           </header>
           <div class="week-strip" id="week-strip" role="tablist" aria-label="This week"></div>
           <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
+          <div id="today-alerts" class="stack alert-stack"></div>
           <div id="today-extra"></div>
           <p class="caption" id="today-stats-caption" hidden></p>
           <button class="card stat-strip" id="today-stats" type="button" aria-label="Open recovery details"></button>
           <p class="up-next" id="up-next" hidden></p>
+          <h2 class="section-title">Daily habits</h2>
+          <article class="card list-card" id="habit-list"></article>
         </section>
 
         <!-- RECOVERY -->
@@ -52,6 +55,15 @@
           </div>
           <p id="garmin-sync-message" class="note" hidden></p>
 
+          <h2 class="section-title">Training load</h2>
+          <article class="card load-card" id="load-card"><p class="muted">Loading…</p></article>
+          <h2 class="section-title">Sleep coach</h2>
+          <article class="card sleep-coach" id="sleep-coach"></article>
+          <h2 class="section-title">Body &amp; nutrition</h2>
+          <article class="card" id="body-card"></article>
+          <div class="section-head"><h2 class="section-title">Pain &amp; injuries</h2><button class="btn btn-ghost small" id="log-pain" type="button">Log pain</button></div>
+          <article class="card list-card" id="pain-list"></article>
+          <button class="btn btn-ghost full records-link" type="button" data-view="records">Health records · blood pressure, labs, meds</button>
           <h2 class="section-title">Readiness</h2>
           <article class="card readiness-card">
             <div class="readiness-top"><div><b id="readiness-title">Calculating…</b><p id="readiness-guidance" class="muted"></p></div><span class="score-ring" id="readiness-score">—</span></div>
@@ -94,10 +106,26 @@
             <button class="icon-btn" type="button" data-view="settings" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
           </header>
           <div class="card stat-strip static" id="progress-stats"></div>
+          <div class="section-head"><h2 class="section-title">Goals</h2><button class="btn btn-ghost small" id="add-goal" type="button">Add goal</button></div>
+          <div id="goal-list" class="stack"></div>
+          <h2 class="section-title">What affects you</h2>
+          <article class="card" id="insight-list"></article>
+          <div class="section-head"><h2 class="section-title">Long-term trends</h2><div class="segmented small" role="group" aria-label="Trend range"><button type="button" data-trend-days="90">3 mo</button><button type="button" class="active" data-trend-days="180">6 mo</button><button type="button" data-trend-days="365">1 yr</button></div></div>
+          <div class="trend-grid" id="long-trends"></div>
+          <article class="card" id="race-predictions"></article>
+          <div class="report-links"><a class="btn btn-ghost" href="/api/health/report/monthly" target="_blank" rel="noopener">Monthly report</a><a class="btn btn-ghost" href="/api/health/report/doctor" target="_blank" rel="noopener">Doctor summary</a></div>
           <div class="section-head"><h2 class="section-title">Week in review</h2><div class="week-nav"><button type="button" class="icon-btn small" id="review-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><span id="review-range"></span><button type="button" class="icon-btn small" id="review-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div></div>
           <article class="card review-card" id="review-card"><p class="muted">Loading…</p></article>
           <h2 class="section-title">Lifts</h2>
           <article class="card list-card" id="progress-list"></article>
+        </section>
+
+        <!-- HEALTH RECORDS -->
+        <section id="view-records" class="view" aria-labelledby="records-title">
+          <header class="page-head"><div><button class="back-link" type="button" data-view="recovery"><svg><use href="#i-back"/></svg>Recovery</button><h1 id="records-title">Health records</h1></div><button class="icon-btn" id="add-record" type="button" aria-label="Add record"><svg><use href="#i-plus"/></svg></button></header>
+          <p class="muted">Private to this computer. Use the doctor summary to bring it to an appointment.</p>
+          <div id="record-groups" class="stack"></div>
+          <a class="btn btn-ghost full" href="/api/health/report/doctor" target="_blank" rel="noopener" style="margin-top:14px">Open doctor summary</a>
         </section>
 
         <!-- SETTINGS -->
@@ -113,6 +141,16 @@
             <p>Used for pull-ups and dips, so their estimated 1RM counts you plus any added weight. A weight from a daily check-in takes priority.</p>
             <form id="settings-form" class="inline-form"><input id="settings-bodyweight" type="number" inputmode="decimal" min="60" max="600" step="any" placeholder="lb"><button class="btn btn-ghost" type="submit">Save</button></form>
             <p class="note" id="settings-status" hidden></p>
+          </article>
+          <article class="card prose-card">
+            <h3>Reminders</h3>
+            <p>Notifications for your check-in, workout and Garmin's bedtime window. They fire while Health Hub is open or installed in this browser; true background reminders come with phone access.</p>
+            <form id="reminder-form" class="stack">
+              <label class="toggle-row"><input id="reminder-enabled" type="checkbox"><span><b>Turn on reminders</b><small id="reminder-permission">Your browser will ask permission.</small></span></label>
+              <div class="form-grid"><label>Check-in<input id="reminder-checkin" type="time"></label><label>Workout <span>optional</span><input id="reminder-workout" type="time"></label></div>
+              <label class="toggle-row"><input id="reminder-bedtime" type="checkbox"><span><b>Bedtime reminder</b><small id="reminder-bedtime-note">30 minutes before Garmin's recommended window.</small></span></label>
+              <button class="btn btn-ghost" type="submit">Save reminders</button>
+            </form>
           </article>
           <article class="card prose-card">
             <h3>Private by design</h3>
@@ -149,10 +187,17 @@
     <dialog id="race-dialog" class="sheet"><form id="race-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Race planner</p><h2 id="race-dialog-title">Plan a race</h2><label>Race name<input id="race-name" value="Fall Marathon" maxlength="80" required></label><div class="form-grid"><label>Race date<input id="race-date" type="date" required></label><label>Distance<select id="race-distance"><option value="marathon">Marathon</option><option value="half">Half marathon</option><option value="10k">10K</option><option value="5k">5K</option></select></label></div><div class="form-grid"><label>Goal time <span>optional · H:MM</span><input id="race-goal" placeholder="3:45" maxlength="10"></label><label>Peak miles/week <span>optional</span><input id="race-peak" type="number" inputmode="decimal" min="10" max="120" step="any" placeholder="auto"></label></div><label>Current miles/week <span id="race-current-hint">from Garmin, last 4 weeks</span><input id="race-current" type="number" inputmode="decimal" min="0" max="150" step="any"></label><fieldset class="day-picker"><legend>Run days</legend><div id="race-days"></div></fieldset><label>Long run day<select id="race-long-day"><option value="5">Saturday</option><option value="6" selected>Sunday</option></select></label><div id="race-preview" class="race-preview" hidden></div><p id="race-form-status" class="note error" hidden></p><div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-preview-btn">Preview</button><button class="btn btn-primary" type="submit" id="race-save">Save plan</button></div></form></dialog>
     <dialog id="race-sheet" class="sheet"><div id="race-sheet-body"></div></dialog>
 
+    <!-- Health logging -->
+    <dialog id="pain-dialog" class="sheet"><form id="pain-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Pain &amp; injuries</p><h2>Where does it hurt?</h2><div class="chip-row wrap" id="pain-areas"></div><label>How bad? <span id="pain-severity-label">4/10</span><input id="pain-severity" type="range" min="1" max="10" value="4"></label><label>Notes <span>optional</span><input id="pain-notes" maxlength="300" placeholder="e.g. sharp at the bottom of bench"></label><p class="muted">Workouts will flag exercises that load this area and suggest swaps until you mark it resolved.</p><button class="btn btn-primary full" type="submit">Save</button></form></dialog>
+    <dialog id="measure-dialog" class="sheet"><form id="measure-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Body</p><h2>Add measurements</h2><div class="form-grid three"><label>Weight <span>lb</span><input id="measure-weight" type="number" inputmode="decimal" min="50" max="700" step="any"></label><label>Waist <span>in</span><input id="measure-waist" type="number" inputmode="decimal" min="15" max="80" step="any"></label><label>Body fat <span>%</span><input id="measure-bf" type="number" inputmode="decimal" min="2" max="70" step="any"></label></div><label>Date<input id="measure-date" type="date"></label><button class="btn btn-primary full" type="submit">Save</button></form></dialog>
+    <dialog id="record-dialog" class="sheet"><form id="record-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Health records</p><h2>Add a record</h2><label>Type<select id="record-kind"><option value="blood_pressure">Blood pressure</option><option value="lab">Lab result</option><option value="supplement">Supplement</option><option value="medication">Medication</option><option value="visit">Doctor visit</option></select></label><label id="record-name-label">Name<input id="record-name" maxlength="120" placeholder="e.g. Vitamin D, LDL cholesterol"></label><div class="form-grid three"><label id="record-value-label">Value<input id="record-value" maxlength="60" placeholder="120/80"></label><label>Unit<input id="record-unit" maxlength="30" placeholder="mmHg"></label><label>Reference <span>labs</span><input id="record-reference" maxlength="60" placeholder="30–100"></label></div><label>Date<input id="record-date" type="date"></label><label>Notes<textarea id="record-notes" rows="2" maxlength="1000"></textarea></label><p id="record-status" class="note error" hidden></p><button class="btn btn-primary full" type="submit">Save record</button></form></dialog>
+    <dialog id="goal-dialog" class="sheet"><form id="goal-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Goals</p><h2>Set a goal</h2><label>Type<select id="goal-kind"><option value="lift">Strength (estimated 1RM)</option><option value="bodyweight">Bodyweight</option><option value="weekly_miles">Weekly running miles</option><option value="vo2_max">VO₂ max</option></select></label><label id="goal-exercise-label">Lift<input id="goal-exercise" list="goal-lifts" placeholder="Barbell Bench Press"><datalist id="goal-lifts"></datalist></label><div class="form-grid"><label>Target<input id="goal-target" type="number" inputmode="decimal" min="1" step="any" required></label><label>By <span>optional</span><input id="goal-deadline" type="date"></label></div><label>Name<input id="goal-title" maxlength="80" placeholder="e.g. Bench 250"></label><p id="goal-status" class="note error" hidden></p><button class="btn btn-primary full" type="submit">Save goal</button></form></dialog>
+    <dialog id="habit-dialog" class="sheet"><form id="habit-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Habits</p><h2>Add a habit</h2><label>Habit<input id="habit-name" maxlength="60" placeholder="e.g. Stretch before bed" required></label><button class="btn btn-primary full" type="submit">Add habit</button></form></dialog>
+
     <!-- Exercise history sheet -->
     <dialog id="exercise-sheet" class="sheet"><div id="exercise-sheet-body"></div></dialog>
 
-    <dialog id="health-dialog" class="sheet"><form id="health-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Daily check-in</p><h2>How are you doing?</h2><p class="muted">Energy and soreness feed today's readiness score. Not medical advice.</p><div class="form-grid"><label>Sleep <span>hours</span><input id="health-sleep-hours" type="number" min="0" max="24" step=".1" value="7"></label><label>Weight <span>optional · lb</span><input id="health-weight-lbs" type="number" min="50" max="700" step=".1"></label></div><label>Sleep quality <span>1 poor — 10 excellent</span><input id="health-sleep-quality" type="range" min="1" max="10" value="7"></label><label>Energy <span>1 low — 10 high</span><input id="health-energy" type="range" min="1" max="10" value="7"></label><label>Soreness <span>1 fresh — 10 high</span><input id="health-soreness" type="range" min="1" max="10" value="3"></label><label>Stress <span>1 low — 10 high</span><input id="health-stress" type="range" min="1" max="10" value="4"></label><label class="toggle-row"><input id="health-protein" type="checkbox"><span><b>I met my protein goal</b><small>A simple consistency signal, not calorie tracking.</small></span></label><label>Notes <textarea id="health-notes" rows="3" placeholder="Poor sleep, travel, illness, a hard day…"></textarea></label><button class="btn btn-primary full" type="submit">Save check-in</button></form></dialog>
+    <dialog id="health-dialog" class="sheet"><form id="health-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Daily check-in</p><h2>How are you doing?</h2><p class="muted">Energy and soreness feed today's readiness score. Not medical advice.</p><div class="form-grid"><label>Sleep <span>hours</span><input id="health-sleep-hours" type="number" min="0" max="24" step=".1" value="7"></label><label>Weight <span>optional · lb</span><input id="health-weight-lbs" type="number" min="50" max="700" step=".1"></label></div><label>Sleep quality <span>1 poor — 10 excellent</span><input id="health-sleep-quality" type="range" min="1" max="10" value="7"></label><label>Energy <span>1 low — 10 high</span><input id="health-energy" type="range" min="1" max="10" value="7"></label><label>Soreness <span>1 fresh — 10 high</span><input id="health-soreness" type="range" min="1" max="10" value="3"></label><label>Stress <span>1 low — 10 high</span><input id="health-stress" type="range" min="1" max="10" value="4"></label><fieldset class="tag-picker"><legend>Anything notable yesterday or today? <span>Powers your insights</span></legend><div class="chip-row wrap" id="health-tags"></div></fieldset><div class="form-grid"><label>Protein <span id="protein-target-hint">grams</span><input id="health-protein-g" type="number" inputmode="numeric" min="0" max="600" step="any"></label><label>Water <span>liters</span><input id="health-water" type="number" inputmode="decimal" min="0" max="15" step="any"></label></div><label class="toggle-row"><input id="health-protein" type="checkbox"><span><b>I met my protein goal</b><small>A simple consistency signal, not calorie tracking.</small></span></label><label>Notes <textarea id="health-notes" rows="3" placeholder="Poor sleep, travel, illness, a hard day…"></textarea></label><button class="btn btn-primary full" type="submit">Save check-in</button></form></dialog>
 
     <dialog id="plan-dialog" class="sheet"><form id="plan-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Block builder</p><h2 id="plan-dialog-heading">Build your next block</h2><p class="muted" id="plan-dialog-copy">Start with an honest baseline. You will review every session before it becomes active.</p><label>Block name<input id="plan-name" value="Strength &amp; endurance rebuild" maxlength="80"></label><label>Goals <span>One per line, in priority order</span><textarea id="plan-goals" rows="4">Build strength&#10;Build muscle&#10;Improve running endurance</textarea></label><label>Training split<select id="plan-split"><option value="logged-routine">Your routine — chest/tri/shoulders ×2, back/biceps ×2, legs</option><option value="body-part-balanced">Body-part emphasis — chest/tri/shoulders and back/biceps separate</option><option value="push-pull-legs">Push / Pull / Legs</option><option value="balanced-upper-lower">Balanced upper / lower</option><option value="full-body">Full body</option></select><span id="split-help"></span></label><label class="toggle-row"><input id="plan-mobility" type="checkbox"><span><b>Add a dedicated mobility/recovery session</b><small>Leave this off if mobility is not a focus for this block.</small></span></label><div class="form-grid"><label>Weeks<input id="plan-weeks" type="number" value="10" min="4" max="24"></label><label>Lift days / week<input id="plan-lifting-days" type="number" value="5" min="2" max="6"></label><label>Run days / week<input id="plan-run-days" type="number" value="3" min="0" max="5"></label><label>Starting miles / week<input id="plan-miles" type="number" value="6" min="0" max="50" step=".5"></label></div><label>Typical session time <span>minutes</span><input id="plan-minutes" type="number" value="60" min="20" max="180"></label><label>Exercises to avoid or replace<input id="plan-avoid" value="Bulgarian split squats"></label><p id="plan-form-status" class="note error" hidden></p><button class="btn btn-primary full" type="submit">Create review draft</button></form></dialog>
 
@@ -161,7 +206,8 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-21-ui8" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-21-ui9" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=health-hub-2026-11-21-ui9"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;

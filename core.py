@@ -199,7 +199,9 @@ def initialize() -> None:
             import_legacy_sessions(db)
         from planning import apply_exercise_aliases  # local imports: these modules depend on core
         from garmin_sync import ensure_schema
+        from health import ensure_health_schema
         ensure_schema(db)  # Garmin metric columns + raw table exist even before the first sync
+        ensure_health_schema(db)
         apply_exercise_aliases(db)
 
 

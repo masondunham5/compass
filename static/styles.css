@@ -395,6 +395,67 @@ button.row-item:hover { background: var(--surface-2); }
 .vs-chart .planned { background: var(--stage-light); }
 .vs-chart .actual { background: var(--green); }
 
+/* ---------- Health hub ---------- */
+.alert-stack:not(:empty) { margin: 14px 0; }
+.alert { display: flex; gap: 12px; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--text); }
+.alert svg { color: var(--accent); margin-top: 1px; }
+.alert.warn { background: var(--amber-bg); }
+.alert.warn svg, .alert.warn b { color: var(--amber); }
+.alert p { margin: 2px 0 0; color: var(--muted); font-size: .92rem; }
+.chip-row.wrap { flex-wrap: wrap; overflow: visible; }
+.tag-picker { border: 0; padding: 0; margin: 0; }
+.tag-picker legend { font-weight: 600; font-size: .95rem; margin-bottom: 8px; padding: 0; }
+.tag-picker legend span { color: var(--faint); font-weight: 400; font-size: .85rem; }
+.habit { cursor: default; }
+.habit .check { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: 50%; border: 2px solid var(--line); color: transparent; font-weight: 800; }
+.habit.done .check { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.habit .dots { display: flex; gap: 3px; margin-top: 5px; }
+.habit .dots i { width: 7px; height: 7px; border-radius: 2px; background: var(--surface-2); }
+.habit .dots i.on { background: var(--accent); }
+button.habit { cursor: pointer; }
+.habit-add { color: var(--accent); font-weight: 650; justify-content: center; }
+.gauge { display: flex; align-items: baseline; gap: 10px; }
+.gauge b { font-size: 2rem; font-variant-numeric: tabular-nums; }
+.gauge .status { padding: 4px 10px; border-radius: 99px; font-size: .85rem; font-weight: 700; text-transform: capitalize; }
+.status.steady, .status.low { background: var(--green-bg); color: var(--green); }
+.status.rising { background: var(--amber-bg); color: var(--amber); }
+.status.high { background: var(--red-bg); color: var(--red); }
+.status.unknown { background: var(--surface-2); color: var(--muted); }
+.load-bars { display: flex; align-items: flex-end; gap: 2px; height: 60px; margin: 14px 0 6px; }
+.load-bars i { flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; background: var(--stage-light); }
+.load-bars i.recent { background: var(--accent); }
+.zone-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-top: 10px; }
+.zone-row div { padding: 6px 4px; border-radius: 8px; background: var(--surface-2); text-align: center; font-size: .78rem; color: var(--muted); }
+.zone-row b { display: block; color: var(--text); font-size: .95rem; }
+.coach-tips { margin: 12px 0 0; padding-left: 18px; color: var(--muted); }
+.coach-tips li { margin: 5px 0; }
+.records-link { margin-top: 14px; }
+.goal-card .goal-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.goal-card h3 { font-size: 1.02rem; }
+.goal-card .goal-top span { color: var(--muted); font-size: .9rem; white-space: nowrap; }
+.goal-card .meter { margin-top: 10px; }
+.goal-card.achieved .meter i { background: var(--green); }
+.goal-card button { margin-top: 8px; padding: 0; border: 0; background: none; color: var(--faint); font-size: .8rem; }
+.insight { padding: 12px 0; border-top: 1px solid var(--line); }
+.insight:first-child { border-top: 0; padding-top: 0; }
+.insight b { display: block; }
+.insight .delta { font-weight: 750; }
+.insight .delta.good { color: var(--green); }
+.insight .delta.bad { color: var(--amber); }
+.insight small { color: var(--faint); }
+.report-links { display: flex; gap: 10px; margin-top: 14px; }
+.report-links .btn { flex: 1; text-decoration: none; font-size: .95rem; }
+.record-group h3 { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.record-group .row-item small { white-space: normal; }
+.record-actions { display: flex; gap: 6px; }
+.record-actions button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 99px; background: none; color: var(--muted); font-size: .78rem; }
+.pain-warning { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--amber-bg); color: var(--amber); font-size: .9rem; }
+.pain-warning span { color: var(--muted); }
+.prediction-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+.prediction-grid div { padding: 10px 8px; border-radius: 12px; background: var(--surface-2); text-align: center; }
+.prediction-grid span { display: block; color: var(--muted); font-size: .75rem; }
+.prediction-grid b { font-variant-numeric: tabular-nums; }
+
 /* ---------- Tab bar ---------- */
 .tabbar {
   position: fixed; z-index: 20; left: 0; right: 0; bottom: 0;

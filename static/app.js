@@ -69,7 +69,7 @@ let installPrompt = null;
 let editingSessionId = null;
 let activePlan = null;
 
-const TAB_FOR_VIEW = { today: "today", recovery: "recovery", train: "train", workout: "train", progress: "progress", settings: "progress" };
+const TAB_FOR_VIEW = { today: "today", recovery: "recovery", train: "train", workout: "train", progress: "progress", settings: "progress", records: "recovery" };
 
 function selectView(view) {
   $$(".view").forEach(element => element.classList.toggle("active", element.id === `view-${view}`));
@@ -110,6 +110,7 @@ async function load() {
   renderTrain();
   renderProgress();
   renderSettings();
+  if (window.renderHealthHub) window.renderHealthHub().catch(error => console.warn("Health sections failed to load", error));
 }
 
 function planKicker(plan) {
@@ -549,7 +550,7 @@ async function openSession(sessionId, options = {}) {
       : p ? `<span class="${p.change > 0 ? "progression-up" : ""}">Next ${p.weight ? `${p.weight} × ` : "BW × "}${p.reps}${p.change > 0 ? ` (+${p.change})` : p.change < 0 ? ` (${p.change})` : ""}</span>`
       : "No baseline";
     const tools = done ? "" : `<div class="exercise-tools"><button type="button" data-tool="add-set">+ Set</button><button type="button" data-tool="edit">Edit</button><button type="button" data-tool="swap">Swap</button><button type="button" data-tool="remove" class="danger">Remove</button></div>`;
-    return `<article class="card exercise" data-index="${exercise.index}"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · rest ${Math.floor((exercise.rest_seconds || 90) / 60)}:${String((exercise.rest_seconds || 90) % 60).padStart(2, "0")} · ${esc(exercise.starting_guide)}</p></div><span class="last">${last}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div>${tools}</article>`;
+    return `<article class="card exercise" data-index="${exercise.index}"><div class="exercise-head"><div><h3>${esc(exercise.name)}</h3><p>${count} × ${esc(exercise.target_reps)} · rest ${Math.floor((exercise.rest_seconds || 90) / 60)}:${String((exercise.rest_seconds || 90) % 60).padStart(2, "0")} · ${esc(exercise.starting_guide)}</p></div><span class="last">${last}</span></div><div class="set-grid"><div class="set-labels"><span>SET</span><span>LB</span><span>REPS</span><span>RPE</span><span></span><span></span></div>${Array.from({ length: count }, (_, index) => setRow(exercise, index + 1, exercise.sets?.find(log => log.set_number === index + 1))).join("")}</div>${exercise.pain_warning ? `<div class="pain-warning">${esc(exercise.pain_warning.message)}${exercise.pain_warning.swaps?.length ? `<br><span>Swaps: ${esc(exercise.pain_warning.swaps.join(", "))}</span>` : ""}</div>` : ""}${tools}</article>`;
   }).join("");
   const addButton = done ? "" : `<button class="btn btn-ghost full add-exercise" type="button" id="add-exercise">${icon("plus")}Add exercise</button>`;
   target.innerHTML = `${header}<div class="workout-progress"><i></i></div>${exercises}${addButton}<div class="rest-bar"><button class="timer" type="button" id="timer-toggle"><b id="rest-clock">01:30</b><span>Rest</span></button>${done ? "" : '<button class="btn btn-primary" type="button" id="finish-session">Finish workout</button>'}</div>`;
@@ -1153,6 +1154,9 @@ $("#health-form").onsubmit = async event => {
       energy: Number($("#health-energy").value), soreness: Number($("#health-soreness").value), stress: Number($("#health-stress").value),
       weight_lbs: $("#health-weight-lbs").value ? Number($("#health-weight-lbs").value) : null,
       protein_goal_met: $("#health-protein").checked, notes: $("#health-notes").value.trim(),
+      tags: $$("#health-tags .chip.active").map(chip => chip.dataset.tag),
+      protein_g: $("#health-protein-g").value ? Number($("#health-protein-g").value) : null,
+      water_l: $("#health-water").value ? Number($("#health-water").value) : null,
     }) });
     $("#health-dialog").close(); await load();
   } catch (error) { alert(error.message); }

@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import core
+import health
 from activities import (  # noqa: F401  (re-exported)
     activity_id, garmin_activity_kind, match_garmin_activities, normalize_activity, parse_garmin_csv, parse_xml_activity,
 )
@@ -59,6 +60,10 @@ app = FastAPI(
     redoc_url=None,
     lifespan=lifespan,
 )
+
+import health_api  # noqa: E402  (routes for the health features)
+
+app.include_router(health_api.router)
 
 
 
@@ -130,6 +135,9 @@ class DailyHealth(BaseModel):
     weight_lbs: float | None = Field(default=None, ge=50, le=700)
     protein_goal_met: bool = False
     notes: str = Field(default="", max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=12)
+    protein_g: float | None = Field(default=None, ge=0, le=600)
+    water_l: float | None = Field(default=None, ge=0, le=15)
 
 
 
@@ -385,9 +393,11 @@ def training_recommendation() -> dict[str, Any]:
         window = ((today - timedelta(days=3)).isoformat(), (today - timedelta(days=1)).isoformat())
         trained = {row[0] for row in db.execute("SELECT session_date FROM sessions WHERE status = 'completed' AND session_date BETWEEN ? AND ?", window)}
         trained |= {row[0] for row in db.execute("SELECT activity_date FROM imported_activities WHERE activity_date BETWEEN ? AND ?", window)}
+        illness = health.illness_signal(db, today)["warning"]
+        load_ratio = health.training_load(db, today)["ratio"]
     return deterministic_training_recommendation(
         [row_to_session(row) for row in session_rows], [dict(row) for row in metric_rows], dict(manual) if manual else None,
-        recent_training_days=len(trained),
+        recent_training_days=len(trained), illness_warning=illness, load_ratio=load_ratio,
     )
 
 
@@ -507,13 +517,18 @@ def save_daily_health(checkin: DailyHealth) -> dict[str, Any]:
     today = date.today().isoformat()
     record = {**checkin.model_dump(), "checkin_date": today}
     with connection() as db:
+        target = health.protein_target(db)
+        protein_met = checkin.protein_goal_met or bool(checkin.protein_g and target and checkin.protein_g >= target)
+        tags = sorted({tag.strip().lower() for tag in checkin.tags if tag.strip()})
         db.execute(
-            """INSERT INTO daily_health (checkin_date, sleep_hours, sleep_quality, energy, soreness, stress, weight_lbs, protein_goal_met, notes, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO daily_health (checkin_date, sleep_hours, sleep_quality, energy, soreness, stress, weight_lbs, protein_goal_met, notes, updated_at, tags_json, protein_g, water_l)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(checkin_date) DO UPDATE SET sleep_hours=excluded.sleep_hours, sleep_quality=excluded.sleep_quality,
                energy=excluded.energy, soreness=excluded.soreness, stress=excluded.stress, weight_lbs=excluded.weight_lbs,
-               protein_goal_met=excluded.protein_goal_met, notes=excluded.notes, updated_at=excluded.updated_at""",
-            (today, checkin.sleep_hours, checkin.sleep_quality, checkin.energy, checkin.soreness, checkin.stress, checkin.weight_lbs, int(checkin.protein_goal_met), checkin.notes, datetime.now().astimezone().isoformat(timespec="seconds")),
+               protein_goal_met=excluded.protein_goal_met, notes=excluded.notes, updated_at=excluded.updated_at,
+               tags_json=excluded.tags_json, protein_g=excluded.protein_g, water_l=excluded.water_l""",
+            (today, checkin.sleep_hours, checkin.sleep_quality, checkin.energy, checkin.soreness, checkin.stress, checkin.weight_lbs, int(protein_met),
+             checkin.notes, datetime.now().astimezone().isoformat(timespec="seconds"), json.dumps(tags), checkin.protein_g, checkin.water_l),
         )
     return {"status": "saved", "record": record, "recommendation": health_recommendation(record)}
 
@@ -704,6 +719,17 @@ def session_detail(session_id: str) -> dict[str, Any]:
             item["exercise_name"] = exercise_name
             previous_rows.append(item)
     session["exercises"] = exercises_for(session, set_rows, previous_rows)
+    # Flag exercises that load an area with logged, unresolved pain, and suggest safer swaps.
+    with connection() as db:
+        pains = health.active_pain(db)
+    if pains:
+        from catalog import EXERCISES, guess_group
+        groups = {name.lower(): group for name, group, _, _ in EXERCISES}
+        for exercise in session["exercises"]:
+            warning = health.pain_warning(exercise["name"], pains)
+            if warning:
+                group = groups.get(exercise["name"].lower()) or guess_group(exercise["name"])
+                exercise["pain_warning"] = {**warning, "swaps": health.safe_swaps(exercise["name"], group, pains)}
     return session
 
 
