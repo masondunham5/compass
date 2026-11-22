@@ -180,7 +180,12 @@ function renderTodayCard(t) {
     if ((focus.adjusted_sets || focus.adjusted_minutes) && !done) {
       toggle = `<button class="text-link" id="toggle-length" type="button">${state.fullSession ? `Use the short version (${focus.adjusted_minutes} min)` : `Do the full ${focus.minutes} min instead`}</button>`;
     }
-    card.innerHTML = `${banner}<div class="session-body"><div class="session-title"><h2>${esc(cleanTitle(focus.title))}</h2><span>${done ? "Done" : `${minutes} min`}</span></div>${body}${primary}${toggle}</div>`;
+    const notToday = done ? "" : `<div class="not-today"><button type="button" id="move-tomorrow">Move to tomorrow</button><button type="button" id="reschedule-open">Not today? More options</button></div>`;
+    card.innerHTML = `${banner}<div class="session-body"><div class="session-title"><h2>${esc(cleanTitle(focus.title))}</h2><span>${done ? "Done" : `${minutes} min`}</span></div>${body}${primary}${toggle}${notToday}</div>`;
+    const moveTomorrow = $("#move-tomorrow");
+    if (moveTomorrow) moveTomorrow.onclick = () => { window.openReschedule(focus, "move"); $("#move-chips .chip")?.click(); };
+    const rescheduleOpen = $("#reschedule-open");
+    if (rescheduleOpen) rescheduleOpen.onclick = () => window.openReschedule(focus, "move");
     $("#start-focus").onclick = () => openSession(focus.id, { cap: shortened ? focus.adjusted_sets : null, minutes });
     const toggleButton = $("#toggle-length");
     if (toggleButton) toggleButton.onclick = () => { state.fullSession = !state.fullSession; renderTodayCard(t); };
@@ -384,10 +389,11 @@ function renderTrain() {
   $("#train-kicker").textContent = planKicker(t.plan);
   const plan = t.plan;
   $("#block-card").innerHTML = plan
-    ? `<h2>${esc(plan.name)}</h2><p>${esc(plan.phase_message || "")}</p>${plan.in_block ? `<div class="meter"><i style="width:${Math.min(100, (plan.week / plan.weeks) * 100)}%"></i></div><div class="meter-label"><span>Week ${plan.week}</span><span>${plan.weeks} weeks</span></div>` : ""}<div class="block-actions"><button class="btn btn-ghost" type="button" id="adjust-block">Adjust block</button><button class="btn btn-outline" type="button" id="build-block">New block</button></div>`
+    ? `<h2>${esc(plan.name)}</h2><p>${esc(plan.phase_message || "")}</p>${plan.in_block ? `<div class="meter"><i style="width:${Math.min(100, (plan.week / plan.weeks) * 100)}%"></i></div><div class="meter-label"><span>Week ${plan.week}</span><span>${plan.weeks} weeks</span></div>` : ""}<div class="block-actions"><button class="btn btn-ghost" type="button" id="push-plan">Push plan back</button><button class="btn btn-ghost" type="button" id="adjust-block">Adjust block</button><button class="btn btn-outline" type="button" id="build-block">New block</button></div>`
     : `<h2>No active block</h2><p>Build a block to fill your week with planned sessions.</p><div class="block-actions"><button class="btn btn-primary" type="button" id="build-block">Build a block</button></div>`;
   $("#build-block").onclick = () => openPlanBuilder();
   const adjust = $("#adjust-block"); if (adjust) adjust.onclick = () => openPlanBuilder(activePlan);
+  const pushPlan = $("#push-plan"); if (pushPlan) pushPlan.onclick = () => window.openReschedule(null, "push");
 
   // Upcoming, grouped by week
   const sessions = state.overview?.sessions || [];
@@ -445,11 +451,13 @@ function openSessionSheet(session) {
     <p class="muted">${esc(sessionMeta(session))}${session.status !== "planned" ? ` · ${esc(titleCase(session.status))}` : ""}</p>
     ${lines}
     ${planned || session.status === "completed" ? `<button class="btn btn-primary full" type="button" id="sheet-start">${session.status === "completed" ? "Review workout" : session.kind === "run" ? "Start run" : "Start workout"}</button>` : ""}
-    <div class="sheet-actions">${session.kind === "run" && planned ? `<button class="btn btn-ghost" type="button" id="sheet-change-run">Change run</button>` : ""}<button class="btn btn-ghost" type="button" id="sheet-edit">${session.kind === "run" ? "Move / notes" : "Edit"}</button><button class="btn btn-ghost" type="button" id="sheet-lock">${session.locked ? "Unlock" : "Lock"}</button></div>
+    <div class="sheet-actions">${planned ? `<button class="btn btn-ghost" type="button" id="sheet-reschedule">Reschedule</button>` : ""}${session.kind === "run" && planned ? `<button class="btn btn-ghost" type="button" id="sheet-change-run">Change run</button>` : ""}<button class="btn btn-ghost" type="button" id="sheet-edit">${session.kind === "run" ? "Move / notes" : "Edit"}</button><button class="btn btn-ghost" type="button" id="sheet-lock">${session.locked ? "Unlock" : "Lock"}</button></div>
     <p class="faint">Locked sessions are never moved when you adjust the block.</p>`;
   sheet.querySelector(".sheet-close").onclick = () => sheet.close();
   const start = $("#sheet-start"); if (start) start.onclick = () => { sheet.close(); openSession(session.id); };
   $("#sheet-edit").onclick = () => { sheet.close(); openSessionEditor(session); };
+  const resched = $("#sheet-reschedule");
+  if (resched) resched.onclick = () => { sheet.close(); window.openReschedule(session, "move"); };
   const changeRun = $("#sheet-change-run");
   if (changeRun) changeRun.onclick = () => { sheet.close(); openRunEditor(session, null); };
   $("#sheet-lock").onclick = async () => { await api(`/api/sessions/${encodeURIComponent(session.id)}/lock`, { method: "POST" }); sheet.close(); await load(); };

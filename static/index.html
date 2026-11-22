@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui9">
+    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui10">
     <title>Health Hub</title>
   </head>
   <body>
@@ -187,6 +187,17 @@
     <dialog id="race-dialog" class="sheet"><form id="race-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Race planner</p><h2 id="race-dialog-title">Plan a race</h2><label>Race name<input id="race-name" value="Fall Marathon" maxlength="80" required></label><div class="form-grid"><label>Race date<input id="race-date" type="date" required></label><label>Distance<select id="race-distance"><option value="marathon">Marathon</option><option value="half">Half marathon</option><option value="10k">10K</option><option value="5k">5K</option></select></label></div><div class="form-grid"><label>Goal time <span>optional · H:MM</span><input id="race-goal" placeholder="3:45" maxlength="10"></label><label>Peak miles/week <span>optional</span><input id="race-peak" type="number" inputmode="decimal" min="10" max="120" step="any" placeholder="auto"></label></div><label>Current miles/week <span id="race-current-hint">from Garmin, last 4 weeks</span><input id="race-current" type="number" inputmode="decimal" min="0" max="150" step="any"></label><fieldset class="day-picker"><legend>Run days</legend><div id="race-days"></div></fieldset><label>Long run day<select id="race-long-day"><option value="5">Saturday</option><option value="6" selected>Sunday</option></select></label><div id="race-preview" class="race-preview" hidden></div><p id="race-form-status" class="note error" hidden></p><div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-preview-btn">Preview</button><button class="btn btn-primary" type="submit" id="race-save">Save plan</button></div></form></dialog>
     <dialog id="race-sheet" class="sheet"><div id="race-sheet-body"></div></dialog>
 
+    <!-- Rescheduling -->
+    <dialog id="reschedule-sheet" class="sheet"><div><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      <p class="kicker" id="reschedule-kicker">Reschedule</p><h2 id="reschedule-title">Change the plan</h2>
+      <div class="segmented" id="reschedule-mode"><button type="button" class="active" data-mode="move">Move this one</button><button type="button" data-mode="push">Push plan back</button></div>
+      <div id="reschedule-move"><div class="chip-row wrap" id="move-chips"></div><label>Or pick a date<input id="move-date" type="date"></label></div>
+      <div id="reschedule-push" hidden><div class="chip-row wrap" id="push-chips"></div><label>Starting from<input id="push-from" type="date"></label><label class="toggle-row"><input id="push-runs" type="checkbox" checked><span><b>Include runs</b><small>Race day never moves; race-plan runs stop before it.</small></span></label></div>
+      <div id="reschedule-preview" class="race-preview"></div>
+      <button class="btn btn-primary full" type="button" id="reschedule-apply" disabled>Apply</button>
+    </div></dialog>
+    <div id="undo-bar" class="undo-bar" hidden role="status"><span id="undo-text"></span><button type="button" id="undo-button">Undo</button></div>
+
     <!-- Health logging -->
     <dialog id="pain-dialog" class="sheet"><form id="pain-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Pain &amp; injuries</p><h2>Where does it hurt?</h2><div class="chip-row wrap" id="pain-areas"></div><label>How bad? <span id="pain-severity-label">4/10</span><input id="pain-severity" type="range" min="1" max="10" value="4"></label><label>Notes <span>optional</span><input id="pain-notes" maxlength="300" placeholder="e.g. sharp at the bottom of bench"></label><p class="muted">Workouts will flag exercises that load this area and suggest swaps until you mark it resolved.</p><button class="btn btn-primary full" type="submit">Save</button></form></dialog>
     <dialog id="measure-dialog" class="sheet"><form id="measure-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Body</p><h2>Add measurements</h2><div class="form-grid three"><label>Weight <span>lb</span><input id="measure-weight" type="number" inputmode="decimal" min="50" max="700" step="any"></label><label>Waist <span>in</span><input id="measure-waist" type="number" inputmode="decimal" min="15" max="80" step="any"></label><label>Body fat <span>%</span><input id="measure-bf" type="number" inputmode="decimal" min="2" max="70" step="any"></label></div><label>Date<input id="measure-date" type="date"></label><button class="btn btn-primary full" type="submit">Save</button></form></dialog>
@@ -206,8 +217,9 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-21-ui9" onerror="window.__healthHubBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=health-hub-2026-11-21-ui9"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-21-ui10" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=health-hub-2026-11-21-ui10"></script>
+    <script src="/static/schedule.js?v=health-hub-2026-11-21-ui10"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;

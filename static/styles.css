@@ -253,8 +253,8 @@ button.row-item:hover { background: var(--surface-2); }
 .block-card p { margin: 6px 0 0; color: var(--muted); }
 .block-card .meter { margin-top: 16px; }
 .block-card .meter-label { display: flex; justify-content: space-between; margin-top: 8px; color: var(--faint); font-size: .85rem; }
-.block-actions { display: flex; gap: 10px; margin-top: 16px; }
-.block-actions .btn { flex: 1; min-height: 42px; font-size: .95rem; }
+.block-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.block-actions .btn { flex: 1 1 30%; min-height: 42px; padding: 0 12px; font-size: .92rem; white-space: nowrap; }
 .week-label { margin: 18px 4px 2px; color: var(--muted); font-size: .85rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .date-chip { display: grid; justify-items: center; width: 44px; flex: none; }
 .date-chip span { color: var(--muted); font-size: .78rem; text-transform: uppercase; }
@@ -455,6 +455,20 @@ button.habit { cursor: pointer; }
 .prediction-grid div { padding: 10px 8px; border-radius: 12px; background: var(--surface-2); text-align: center; }
 .prediction-grid span { display: block; color: var(--muted); font-size: .75rem; }
 .prediction-grid b { font-variant-numeric: tabular-nums; }
+
+/* ---------- Rescheduling ---------- */
+#reschedule-mode { display: flex; }
+#reschedule-mode button { flex: 1; }
+.move-list { margin: 0; padding: 0; list-style: none; }
+.move-list li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-size: .92rem; }
+.move-list li:first-child { border-top: 0; }
+.move-list li span:last-child { color: var(--accent); white-space: nowrap; }
+.move-list.kept li span:last-child { color: var(--faint); }
+.undo-bar { position: fixed; z-index: 30; left: 50%; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px; max-width: calc(100% - 32px); padding: 10px 10px 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-weight: 600; font-size: .92rem; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.undo-bar button { padding: 6px 14px; border: 0; border-radius: 999px; background: var(--accent-strong); color: #fff; font-weight: 700; }
+.not-today { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
+.not-today button { border: 0; background: none; color: var(--muted); font-size: .92rem; padding: 6px 8px; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- Tab bar ---------- */
 .tabbar {

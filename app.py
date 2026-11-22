@@ -1326,6 +1326,66 @@ def delete_race(race_id: str) -> dict[str, Any]:
     return {"status": "deleted"}
 
 
+# ---------------------------------------------------------------- rescheduling
+
+
+class ScheduleRequest(BaseModel):
+    action: str = Field(pattern="^(move|push|skip)$")
+    session_id: str | None = None
+    to_date: str | None = None
+    from_date: str | None = None
+    days: int = Field(default=1, ge=1, le=60)
+    include_runs: bool = True
+    mode: str = Field(default="tomorrow", pattern="^(tomorrow|push)$")
+
+
+def _schedule_plan(db: sqlite3.Connection, request: ScheduleRequest) -> dict[str, Any]:
+    import schedule
+    try:
+        if request.action == "move":
+            if not request.session_id or not request.to_date:
+                raise HTTPException(status_code=400, detail="Pick a workout and a new date.")
+            date.fromisoformat(request.to_date)
+            return schedule.move_session(db, request.session_id, request.to_date)
+        if request.action == "push":
+            start = request.from_date or date.today().isoformat()
+            date.fromisoformat(start)
+            return schedule.push_back(db, start, request.days, request.include_runs)
+        if not request.session_id:
+            raise HTTPException(status_code=400, detail="Pick a workout to skip.")
+        return schedule.skip_session(db, request.session_id, request.mode)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Use a valid date.") from error
+
+
+@app.post("/api/schedule/preview")
+def preview_schedule(request: ScheduleRequest) -> dict[str, Any]:
+    """What a move/push/skip would change, without changing anything."""
+    with connection() as db:
+        return _schedule_plan(db, request)
+
+
+@app.post("/api/schedule/apply")
+def apply_schedule(request: ScheduleRequest) -> dict[str, Any]:
+    import schedule
+    with connection() as db:
+        return schedule.apply_moves(db, _schedule_plan(db, request))
+
+
+@app.post("/api/schedule/undo")
+def undo_schedule() -> dict[str, Any]:
+    import schedule
+    with connection() as db:
+        return schedule.undo_last(db)
+
+
+@app.get("/api/schedule/last")
+def last_schedule_change() -> dict[str, Any]:
+    import schedule
+    with connection() as db:
+        return {"summary": schedule.last_change(db)}
+
+
 def race_run_cutoff(db: sqlite3.Connection) -> str | None:
     """Latest race date with an applied plan; block runs up to it are owned by the race plan."""
     row = db.execute("SELECT MAX(race_date) FROM races WHERE applied_at IS NOT NULL AND race_date >= ?", (date.today().isoformat(),)).fetchone()
