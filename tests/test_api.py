@@ -28,8 +28,18 @@ def client(tmp_path, monkeypatch):
 
 
 def test_startup_makes_one_daily_backup(client, tmp_path):
-    assert len(list((tmp_path / "backups").glob("auto_health_hub_*.db"))) == 1
+    assert len(list((tmp_path / "backups").glob("auto_compass_*.db"))) == 1
     assert core.auto_backup() is None  # a second call the same day does nothing
+
+
+def test_old_database_name_is_moved_once_and_never_overwrites(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "DATABASE", tmp_path / "compass.db")
+    (tmp_path / "lifting_hub.db").write_bytes(b"old")
+    assert core.migrate_database_name() is True
+    assert (tmp_path / "compass.db").read_bytes() == b"old" and not (tmp_path / "lifting_hub.db").exists()
+    (tmp_path / "lifting_hub.db").write_bytes(b"stale")
+    assert core.migrate_database_name() is False  # compass.db exists: leave both alone
+    assert (tmp_path / "compass.db").read_bytes() == b"old"
 
 
 def test_core_pages_respond(client):

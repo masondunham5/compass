@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 
 
-DATABASE = DATA_DIR / "lifting_hub.db"
+DATABASE = DATA_DIR / "compass.db"
+OLD_DATABASE_NAMES = ("lifting_hub.db",)  # renamed to compass.db on first start (see initialize)
 
 
 LEGACY_FILE = Path(os.getenv("LOCALAPPDATA", ".")) / "Training Planner" / "planner.json"
@@ -58,15 +59,29 @@ def auto_backup(min_hours: float = 20, keep: int = 14) -> Path | None:
     if not DATABASE.exists():
         return None
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    existing = sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))
+    # "auto_*" covers older auto_health_hub_* backups too; order by time, not name.
+    automatic = lambda: sorted(BACKUP_DIR.glob("auto_*.db"), key=lambda path: path.stat().st_mtime)
+    existing = automatic()
     if existing and (datetime.now().timestamp() - existing[-1].stat().st_mtime) < min_hours * 3600:
         return None
-    destination = BACKUP_DIR / f"auto_health_hub_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+    destination = BACKUP_DIR / f"auto_compass_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
     with sqlite3.connect(DATABASE) as source, sqlite3.connect(destination) as target:
         source.backup(target)
-    for old in sorted(BACKUP_DIR.glob("auto_health_hub_*.db"))[:-keep]:
+    for old in automatic()[:-keep]:
         old.unlink(missing_ok=True)
     return destination
+
+
+def migrate_database_name() -> bool:
+    """One-time move from an older database file name to compass.db. Never overwrites an existing file."""
+    if DATABASE.exists():
+        return False
+    for name in OLD_DATABASE_NAMES:
+        old = DATABASE.with_name(name)
+        if old.exists():
+            old.rename(DATABASE)
+            return True
+    return False
 
 
 def connection() -> sqlite3.Connection:
@@ -77,6 +92,7 @@ def connection() -> sqlite3.Connection:
 
 
 def initialize() -> None:
+    migrate_database_name()
     with connection() as db:
         db.executescript(
             """

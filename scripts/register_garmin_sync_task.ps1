@@ -1,11 +1,11 @@
 <#
-Creates or updates one daily local Task Scheduler job for Health Hub's Garmin sync.
+Creates or updates one daily local Task Scheduler job for Compass's Garmin sync.
 
-Run from PowerShell in the Health Hub folder:
+Run from PowerShell in the Compass folder:
   powershell -ExecutionPolicy Bypass -File .\scripts\register_garmin_sync_task.ps1
 
 This script does not contain or print your Garmin key. It expects the local .env
-file to already exist in the Health Hub root.
+file to already exist in the Compass root.
 #>
 
 param(
@@ -13,7 +13,7 @@ param(
     [string]$Time = "23:00",
     [ValidateRange(1, 30)]
     [int]$Days = 2,
-    [string]$TaskName = "Health Hub - Garmin Daily Sync"
+    [string]$TaskName = "Compass - Garmin Daily Sync"
 )
 
 $projectRoot = Split-Path -Parent $PSScriptRoot

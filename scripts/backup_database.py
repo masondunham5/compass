@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "data" / "lifting_hub.db"
+SOURCE = ROOT / "data" / "compass.db"
 BACKUPS = ROOT / "backups"
 
 
@@ -23,7 +23,7 @@ def main() -> None:
         print("Stopped: no Compass database exists yet. Nothing was changed.")
         return
     BACKUPS.mkdir(exist_ok=True)
-    destination = BACKUPS / f"health_hub_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+    destination = BACKUPS / f"compass_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
     # SQLite's backup API gives a consistent snapshot even if the server is running.
     with sqlite3.connect(SOURCE) as source, sqlite3.connect(destination) as target:
         source.backup(target)

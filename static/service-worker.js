@@ -1,4 +1,4 @@
-const CACHE = "health-hub-v4";
+const CACHE = "compass-v5";
 
 self.addEventListener("install", event => {
   event.waitUntil(
@@ -12,7 +12,7 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys()
-      .then(names => Promise.all(names.filter(name => name.startsWith("health-hub-") && name !== CACHE).map(name => caches.delete(name))))
+      .then(names => Promise.all(names.filter(name => (name.startsWith("health-hub-") || name.startsWith("compass-")) && name !== CACHE).map(name => caches.delete(name))))
       .then(() => self.clients.claim())
   );
 });

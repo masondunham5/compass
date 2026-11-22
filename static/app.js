@@ -1,7 +1,7 @@
-window.__healthHubBootState = "script-started";
+window.__compassBootState = "script-started";
 
 function reportStartupIssue(detail) {
-  window.__healthHubBootState = `failed: ${detail}`;
+  window.__compassBootState = `failed: ${detail}`;
   const diagnostic = document.getElementById("startup-diagnostic");
   if (!diagnostic) return;
   diagnostic.hidden = false;
@@ -1196,7 +1196,7 @@ $("#install-app").onclick = async () => { if (!installPrompt) return; installPro
 // Offline support is optional; some browsers refuse service workers on plain http.
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/static/service-worker.js").catch(() => {});
 
-window.__healthHubBootState = "ready";
+window.__compassBootState = "ready";
 load().catch(error => {
   $("#today-title").textContent = "Can't reach Compass";
   $("#today-card").innerHTML = `<div class="empty-day"><p class="muted">${esc(error.message || "The server did not respond.")} Check that the app is running on this computer.</p></div>`;

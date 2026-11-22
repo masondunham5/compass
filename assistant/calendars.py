@@ -80,7 +80,7 @@ def url_hint(url: str | None) -> str | None:
 
 
 def fetch(url: str) -> bytes:
-    request = urllib.request.Request(normalize_url(url), headers={"User-Agent": "HealthHub-Calendar/1.0", "Accept": "text/calendar, */*"})
+    request = urllib.request.Request(normalize_url(url), headers={"User-Agent": "Compass-Calendar/1.0", "Accept": "text/calendar, */*"})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             body = response.read(MAX_BYTES + 1)

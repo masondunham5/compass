@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Compass (folder name `lifting_hub`) is a local-first training and recovery planner: FastAPI + SQLite backend, dependency-free HTML/CSS/JS PWA frontend, and an optional Garmin Connect Personal API sync.
+Compass is a local-first life planner (calendars, school, work, and training): FastAPI + SQLite backend, dependency-free HTML/CSS/JS PWA frontend, and an optional Garmin Connect Personal API sync.
 
 ## Commands
 
@@ -36,7 +36,7 @@ There is no linter or build step.
 
 - `.env` holds the real `GARMIN_PERSONAL_API_KEY`. Do not read, edit, or print it.
 - `Garmin API Key/` is private. Do not open or modify it.
-- `data/lifting_hub.db` is the user's real health data. Tests must not touch it.
+- `data/compass.db` (renamed from `lifting_hub.db` automatically on first start) is the user's real health data. Tests must not touch it.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ There is no linter or build step.
   - `app.py` — FastAPI app (lifespan runs `initialize()` + `auto_backup()`), request models, and every `/api/*` route; serves `static/`.
 - **Tests must patch `core.DATABASE`, `core.DATA_DIR`, `core.LEGACY_FILE` and `core.BACKUP_DIR`** (see fixtures). `tests/test_api.py` exercises routes through `TestClient`.
 - **Schema** is created in `core.initialize()` with `CREATE TABLE IF NOT EXISTS` (it also calls `garmin_sync.ensure_schema`, so Garmin columns exist before the first sync); there is no migration framework, so new columns on existing tables need an explicit `ALTER TABLE ... ADD COLUMN` guarded by a `PRAGMA table_info` check. `connection()` returns a new `sqlite3` connection; `with connection() as db:` commits on exit but does not close.
-- **Backups:** `auto_backup()` snapshots to `backups/auto_health_hub_*.db` at most once per ~20 h (on startup and before each Garmin sync) and keeps the newest 14; manual `scripts/backup_database.py` backups are never pruned.
+- **Backups:** `auto_backup()` snapshots to `backups/auto_compass_*.db` at most once per ~20 h (on startup and before each Garmin sync) and keeps the newest 14; manual `scripts/backup_database.py` backups are never pruned.
 - **`garmin_sync.py`** imports from `core` and `activities`. `run_sync(days)` exchanges the API key for a bearer token, pulls the activity list, then per day (newest first) calls four endpoints (`DAILY_ENDPOINTS`: summary, sleep, HRV, heart rate) and commits that day immediately. Each run writes a row to `garmin_sync_log` (`running` → `success` / `partial` / `error`), which the UI reads for status/history.
   - **Rate limiting:** all HTTP goes through `_request`, which paces calls (`GARMIN_REQUEST_INTERVAL`, default 1.5 s, doubled after a 429) and retries 429/5xx/network errors with exponential backoff honoring `Retry-After` (`GARMIN_MAX_RETRIES`, default 5).
   - **Errors:** `GarminFatalError` (bad key, persistent 429, no network) stops the sync; days already saved are kept and the run returns `status: "partial"`. `GarminEndpointError` (other 4xx/5xx) skips just that endpoint for that day. 404/204 mean "no data".

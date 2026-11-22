@@ -18,11 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import app  # noqa: E402
+import core  # noqa: E402
 
 
 def main() -> None:
-    if app.DATABASE.exists():
-        print(f"Stopped: {app.DATABASE} already exists. Your local data was not changed.")
+    existing = [path for path in (core.DATABASE, *(core.DATABASE.with_name(name) for name in core.OLD_DATABASE_NAMES)) if path.exists()]
+    if existing:
+        print(f"Stopped: {existing[0]} already exists. Your local data was not changed.")
         return
 
     app.initialize()

@@ -40,8 +40,8 @@ requiring a cloud account.
 **Prerequisites:** Python 3.11+.
 
 ```powershell
-git clone https://github.com/YOUR-USERNAME/health-hub.git
-cd health-hub
+git clone https://github.com/YOUR-USERNAME/compass.git
+cd compass
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -52,11 +52,11 @@ Then open `http://127.0.0.1:8765`.
 
 On the original Windows setup, you can also double-click:
 
-`Launch Lifting Hub.cmd`
+`Launch Compass.cmd`
 
 For a visible troubleshooting window, use:
 
-`Start Lifting Hub (diagnostic).cmd`
+`Start Compass (diagnostic).cmd`
 
 ### Optional demo data
 
@@ -172,7 +172,7 @@ included in GitHub.
 ## Project structure
 
 ```text
-health-hub/
+compass/
 ├── app.py                 # FastAPI routes, planning logic, SQLite persistence
 ├── garmin_sync.py         # Optional private Garmin Personal API sync command
 ├── static/                # Responsive PWA interface
@@ -186,7 +186,7 @@ health-hub/
 
 This folder is safe to publish only after checking it does **not** include:
 
-- `data/lifting_hub.db` or another database file
+- `data/compass.db` or another database file
 - `.env` files, tokens, or connection URLs
 - personal workout logs, screenshots, or exported health data
 
