@@ -4,13 +4,13 @@
 const timeOf = iso => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 async function renderAssistant() {
-  const [agenda, alerts, feeds] = await Promise.all([api("/api/assistant/agenda"), api("/api/assistant/alerts"), api("/api/assistant/calendars")]);
-  renderAgenda(agenda, alerts.alerts);
+  const [agenda, alerts, feeds, todayPlan] = await Promise.all([api("/api/assistant/agenda"), api("/api/assistant/alerts"), api("/api/assistant/calendars"), api("/api/assistant/plan?days=1").catch(() => null)]);
+  renderAgenda(agenda, alerts.alerts, todayPlan);
   renderCalendarSettings(feeds.calendars);
 }
 window.renderAssistant = renderAssistant;
 
-function renderAgenda(agenda, alerts) {
+function renderAgenda(agenda, alerts, todayPlan = null) {
   const card = $("#agenda-card");
   card.hidden = !agenda.has_calendar;
   const kicker = $("#today-kicker");
@@ -22,17 +22,22 @@ function renderAgenda(agenda, alerts) {
   const timed = agenda.events.filter(event => !event.all_day);
   const rows = [
     ...allDay.map(event => ({ sort: -1, html: `<li class="${/exam|midterm|final|quiz|test/i.test(event.title) ? "exam" : ""}"><time>All day</time><div><b>${esc(event.title)}</b>${event.location ? `<small>${esc(event.location)}</small>` : ""}</div></li>` })),
-    ...timed.map(event => ({ sort: new Date(event.start).getTime(), html: `<li class="${event.busy ? "" : "free"}${/exam|midterm|final|quiz|test/i.test(event.title) ? " exam" : ""}"><time>${esc(timeOf(event.start))}</time><div><b>${esc(event.title)}</b><small>${esc(timeOf(event.start))}–${esc(timeOf(event.end))}${event.location ? ` · ${esc(event.location)}` : ""}${event.busy ? "" : " · shown as free"}</small></div></li>` })),
+    ...timed.map(event => ({ sort: new Date(event.start).getTime(), html: `<li class="${event.busy ? "" : "free"}${String(event.feed_kind || "").startsWith("plan") ? " planned" : event.feed_kind === "work" ? " work" : /exam|midterm|final|quiz|test/i.test(event.title) ? " exam" : ""}"><time>${esc(timeOf(event.start))}</time><div><b>${esc(event.title)}</b><small>${esc(timeOf(event.start))}–${esc(timeOf(event.end))}${event.location ? ` · ${esc(event.location)}` : ""}${event.busy ? "" : " · shown as free"}</small></div></li>` })),
   ].sort((a, b) => a.sort - b.sort);
   const planned = agenda.workouts.filter(workout => workout.status === "planned");
   const busyHours = (agenda.busy_minutes / 60).toFixed(1);
   const slot = agenda.best_slot && planned.length
     ? `<div class="best-slot">Best time for ${esc(cleanTitle(planned[0].title))}: ${esc(agenda.best_slot.start)}–${esc(agenda.best_slot.end)}</div>`
     : planned.length ? `<div class="best-slot">No free ${planned[0].minutes}-minute gap between 6 AM and 10 PM — consider the short version or moving it.</div>` : "";
+  const suggested = (todayPlan?.days?.[0]?.blocks || []).filter(block => block.status === "draft");
+  const suggestion = suggested.length ? `<button type="button" class="best-slot as-link" id="review-today-plan">${suggested.length} suggested block${suggested.length === 1 ? "" : "s"} for today (${suggested.map(b => KIND_LABEL_SHORT[b.kind]).filter((v, i, a) => a.indexOf(v) === i).join(" + ")}) — review in Week</button>` : "";
   const examAlerts = alerts.map(alert => `<div class="alert ${esc(alert.level)}" style="margin-top:10px">${icon("alert")}<div><b>${esc(alert.title)}</b><p>${esc(alert.message)}</p></div></div>`).join("");
   card.innerHTML = `<div class="agenda-head"><h3>Today's schedule</h3><span>${agenda.events.length ? `${busyHours} h busy` : "Nothing on the calendar"}</span></div>
-    ${rows.length ? `<ul class="agenda-list">${rows.map(row => row.html).join("")}</ul>` : `<p class="muted">No classes or events today.</p>`}${slot}${examAlerts}`;
+    ${rows.length ? `<ul class="agenda-list">${rows.map(row => row.html).join("")}</ul>` : `<p class="muted">No classes or events today.</p>`}${slot}${suggestion}${examAlerts}`;
+  const review = $("#review-today-plan");
+  if (review) review.onclick = () => selectView("week");
 }
+const KIND_LABEL_SHORT = { study: "study", review: "exam review", workout: "workout" };
 
 function renderCalendarSettings(feeds) {
   $("#calendar-list").innerHTML = feeds.map(feed => `<div class="feed"><b>${esc(feed.name)} <span class="muted">· ${esc(feed.kind)}${feed.source === "file" ? " · uploaded file" : ""}</span></b>
@@ -81,6 +86,7 @@ async function renderWeek(offset = weekStartOffset) {
   }).join("");
   $$("#week-days [data-session]").forEach(button => button.onclick = async () => openSessionSheet(await api(`/api/sessions/${encodeURIComponent(button.dataset.session)}`)));
   $$("#week-days [data-day]").forEach(button => button.onclick = () => openDaySheet(button.dataset.day));
+  if (window.renderWeekPlan) await window.renderWeekPlan(start).catch(error => { $("#plan-summary").innerHTML = `<p class="note error">${esc(error.message)}</p>`; });
 }
 window.renderWeek = renderWeek;
 

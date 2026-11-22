@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui12">
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui13">
     <title>Compass</title>
   </head>
   <body>
@@ -132,6 +132,7 @@
             <div><p class="kicker" id="week-kicker">&nbsp;</p><h1 id="week-title">Week</h1></div>
             <div class="week-nav"><button type="button" class="icon-btn small" id="week-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><button type="button" class="icon-btn small" id="week-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div>
           </header>
+          <div id="plan-summary" class="plan-summary"></div>
           <div id="week-days" class="stack"></div>
           <button class="btn btn-ghost full" type="button" id="week-push" style="margin-top:14px">Push training back…</button>
         </section>
@@ -140,6 +141,8 @@
         <section id="view-more" class="view" aria-labelledby="more-title">
           <header class="page-head"><div><p class="kicker">Compass</p><h1 id="more-title">More</h1></div></header>
           <article class="card list-card">
+            <button type="button" class="row-item" data-view="school"><div class="grow"><b>School</b><small id="more-school-note">Assignments and deadlines from School To Do</small></div><svg><use href="#i-chevron"/></svg></button>
+            <button type="button" class="row-item" data-view="work"><div class="grow"><b>Work schedule</b><small>Shifts during school terms and breaks</small></div><svg><use href="#i-chevron"/></svg></button>
             <button type="button" class="row-item" data-view="settings"><div class="grow"><b>Calendars</b><small>School and personal calendar links</small></div><svg><use href="#i-chevron"/></svg></button>
             <button type="button" class="row-item" data-view="records"><div class="grow"><b>Health records</b><small>Blood pressure, labs, medications, supplements, visits</small></div><svg><use href="#i-chevron"/></svg></button>
             <a class="row-item" href="/api/health/report/monthly" target="_blank" rel="noopener"><div class="grow"><b>Monthly report</b><small>Printable summary of this month</small></div><svg><use href="#i-chevron"/></svg></a>
@@ -147,6 +150,37 @@
             <button type="button" class="row-item" data-view="settings"><div class="grow"><b>Settings</b><small>Garmin, bodyweight, reminders, install</small></div><svg><use href="#i-chevron"/></svg></button>
           </article>
           <p class="faint" style="margin-top:16px">Coming next: tasks and school deadlines, writing your plan into your personal Outlook, and an assistant you can ask to rearrange your week.</p>
+        </section>
+
+        <!-- SCHOOL (read-only from School To Do) -->
+        <section id="view-school" class="view" aria-labelledby="school-title">
+          <header class="page-head"><div><button class="back-link" type="button" data-view="more"><svg><use href="#i-back"/></svg>More</button><h1 id="school-title">School</h1></div></header>
+          <p class="muted" id="school-status">Reading School To Do…</p>
+          <div id="school-groups" class="stack"></div>
+        </section>
+
+        <!-- WORK SCHEDULE -->
+        <section id="view-work" class="view" aria-labelledby="work-title">
+          <header class="page-head"><div><button class="back-link" type="button" data-view="more"><svg><use href="#i-back"/></svg>More</button><h1 id="work-title">Work schedule</h1></div></header>
+          <p class="muted" id="work-status"></p>
+          <h2 class="section-title">Shifts</h2>
+          <article class="card list-card" id="shift-list"></article>
+          <form id="shift-form" class="card stack" style="margin-top:12px">
+            <div class="segmented" id="shift-mode"><button type="button" class="active" data-mode="weekly">Every week</button><button type="button" data-mode="once">One date</button></div>
+            <div class="form-grid"><label id="shift-weekday-label">Day<select id="shift-weekday"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label><label id="shift-date-label" hidden>Date<input id="shift-date" type="date"></label><label id="shift-applies-label">During<select id="shift-applies"><option value="school">School terms</option><option value="break">Breaks</option><option value="always">Always</option></select></label></div>
+            <div class="form-grid"><label>Start<input id="shift-start" type="time" value="12:00" required></label><label>End<input id="shift-end" type="time" value="17:00" required></label></div>
+            <p id="shift-status" class="note error" hidden></p>
+            <button class="btn btn-primary" type="submit">Add shift</button>
+          </form>
+          <h2 class="section-title">Terms &amp; breaks</h2>
+          <p class="faint">Optional. Define your semesters and breaks so the right shifts apply. Without any, every day counts as a school term.</p>
+          <article class="card list-card" id="term-list"></article>
+          <form id="term-form" class="card stack" style="margin-top:12px">
+            <div class="form-grid"><label>Name<input id="term-name" placeholder="Spring 2027" maxlength="60"></label><label>Type<select id="term-kind"><option value="school">School term</option><option value="break">Break</option></select></label></div>
+            <div class="form-grid"><label>Starts<input id="term-start" type="date" required></label><label>Ends<input id="term-end" type="date" required></label></div>
+            <p id="term-status" class="note error" hidden></p>
+            <button class="btn btn-ghost" type="submit">Add term</button>
+          </form>
         </section>
 
         <!-- HEALTH RECORDS -->
@@ -258,10 +292,11 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=compass-2026-11-22-ui12" onerror="window.__healthHubBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=compass-2026-11-22-ui12"></script>
-    <script src="/static/schedule.js?v=compass-2026-11-22-ui12"></script>
-    <script src="/static/assistant.js?v=compass-2026-11-22-ui12"></script>
+    <script src="/static/app.js?v=compass-2026-11-22-ui13" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-22-ui13"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-22-ui13"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-22-ui13"></script>
+    <script src="/static/planner.js?v=compass-2026-11-22-ui13"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;

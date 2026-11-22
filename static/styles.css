@@ -509,6 +509,32 @@ button.habit { cursor: pointer; }
 .week-workout.completed { color: var(--muted); }
 a.row-item { text-decoration: none; }
 
+/* ---------- Planner ---------- */
+.plan-card { margin-bottom: 4px; }
+.plan-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.plan-top b { display: block; }
+.plan-top small { display: block; color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.plan-warnings { margin: 12px 0 0; padding-left: 18px; color: var(--amber); font-size: .9rem; }
+.plan-warnings li { margin: 4px 0; }
+.plan-card .faint { margin: 10px 0 0; }
+.plan-list { margin: 0; padding: 0 16px 12px 74px; list-style: none; display: grid; gap: 5px; }
+.plan-list li { display: grid; grid-template-columns: 64px 1fr 30px; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); font-size: .88rem; }
+.plan-list li.draft { background: transparent; border: 1px dashed var(--stage-light); }
+.plan-list li.fixed { grid-template-columns: 64px 1fr; color: var(--muted); }
+.plan-list time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.plan-list em { font-style: normal; margin-right: 6px; padding: 1px 6px; border-radius: 6px; font-size: .7rem; font-weight: 700; text-transform: uppercase; background: var(--accent-soft); color: var(--accent); }
+.plan-list li.workout em { background: var(--green-bg); color: var(--green); }
+.plan-list li.review em { background: var(--amber-bg); color: var(--amber); }
+.plan-list small { color: var(--faint); }
+.plan-list button { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+.plan-list li.accepted button { background: transparent; color: var(--faint); }
+.agenda-list li.planned b { color: var(--accent); }
+.agenda-list li.work b { color: var(--muted); }
+.best-slot.as-link { display: block; width: 100%; border: 0; text-align: left; cursor: pointer; }
+.school-task .chip { flex: none; }
+.school-task.exam b { color: var(--amber); }
+@media (max-width: 420px) { .plan-list { padding-left: 16px; } }
+
 /* ---------- Tab bar ---------- */
 .tabbar {
   position: fixed; z-index: 20; left: 0; right: 0; bottom: 0;

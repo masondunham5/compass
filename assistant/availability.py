@@ -75,16 +75,33 @@ def best_slot(slots: list[dict[str, Any]], minutes: int) -> dict[str, Any] | Non
     return {"start": _clock(start), "end": _clock(start + minutes), "start_minutes": start}
 
 
+def _fixed_items(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
+    """Work shifts and accepted plan blocks, shaped like calendar events so they count as busy."""
+    from assistant import work  # local import keeps module load order simple
+    items = []
+    for shift in work.shifts_on(db, day):
+        items.append({"title": shift["title"], "start": f"{day.isoformat()}T{shift['start']}", "end": f"{day.isoformat()}T{shift['end']}",
+                      "all_day": False, "busy": True, "location": "", "feed_name": "Work", "feed_kind": "work", "fixed": True})
+    if db.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plan_blocks'").fetchone():
+        for block in db.execute("SELECT * FROM plan_blocks WHERE block_date = ? ORDER BY start", (day.isoformat(),)):
+            start, end = divmod(block["start"], 60), divmod(block["end"], 60)
+            items.append({"title": block["title"], "start": f"{day.isoformat()}T{start[0]:02d}:{start[1]:02d}", "end": f"{day.isoformat()}T{end[0]:02d}:{end[1]:02d}",
+                          "all_day": False, "busy": True, "location": "", "feed_name": "Plan", "feed_kind": f"plan-{block['kind']}", "fixed": False})
+    return items
+
+
 def day_summary(db: sqlite3.Connection, day: date, workout_minutes: int = 60) -> dict[str, Any]:
-    events = events_between(db, day, day)
+    events = sorted(events_between(db, day, day) + _fixed_items(db, day), key=lambda e: (not e["all_day"], e["start"]))
     blocks = _busy_blocks(events, day)
     busy = sum(b - a for a, b in blocks)
-    exams = [event["title"] for event in events if EXAM_WORDS.search(event["title"])]
+    exams = [event["title"] for event in events if EXAM_WORDS.search(event["title"]) and not str(event.get("feed_kind", "")).startswith("plan")]
     slots = free_slots(blocks)
     return {
         "date": day.isoformat(), "busy_minutes": busy, "events": events, "exams": exams,
         "heavy": busy >= HEAVY_BUSY_MINUTES or bool(exams), "free_slots": slots,
-        "best_slot": best_slot(slots, workout_minutes), "has_calendar": bool(db.execute("SELECT 1 FROM calendar_feeds LIMIT 1").fetchone()),
+        "best_slot": best_slot(slots, workout_minutes),
+        "has_calendar": bool(db.execute("SELECT 1 FROM calendar_feeds LIMIT 1").fetchone() or db.execute("SELECT 1 FROM work_shifts LIMIT 1").fetchone()
+                             or db.execute("SELECT 1 FROM plan_blocks LIMIT 1").fetchone()),
     }
 
 

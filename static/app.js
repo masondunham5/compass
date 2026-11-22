@@ -70,7 +70,7 @@ let editingSessionId = null;
 let activePlan = null;
 
 // Top-level tabs: Today · Week · Health (Train / Recovery / Progress) · More.
-const TAB_FOR_VIEW = { today: "today", week: "week", train: "health", workout: "health", recovery: "health", progress: "health", records: "health", more: "more", settings: "more" };
+const TAB_FOR_VIEW = { today: "today", week: "week", train: "health", workout: "health", recovery: "health", progress: "health", records: "health", more: "more", settings: "more", school: "more", work: "more" };
 const HEALTH_VIEWS = ["train", "recovery", "progress"];
 
 function selectView(view) {
@@ -80,6 +80,8 @@ function selectView(view) {
   $$(".tabbar [data-tab]").forEach(button => button.classList.toggle("active", button.dataset.tab === TAB_FOR_VIEW[view]));
   $$(".subnav [data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === view));
   if (view === "week" && window.renderWeek) window.renderWeek();
+  if (view === "school" && window.renderSchool) window.renderSchool().catch(error => { $("#school-status").textContent = error.message; });
+  if (view === "work" && window.renderWork) window.renderWork();
   if (view !== "workout") { state.returnView = view; holdScreenAwake(false); }
   window.scrollTo({ top: 0 });
 }

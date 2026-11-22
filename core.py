@@ -203,7 +203,11 @@ def initialize() -> None:
         ensure_schema(db)  # Garmin metric columns + raw table exist even before the first sync
         ensure_health_schema(db)
         from assistant.calendars import ensure_schema as ensure_calendar_schema
+        from assistant.planner import ensure_schema as ensure_plan_schema
+        from assistant.work import ensure_schema as ensure_work_schema
         ensure_calendar_schema(db)
+        ensure_work_schema(db)
+        ensure_plan_schema(db)
         apply_exercise_aliases(db)
 
 
