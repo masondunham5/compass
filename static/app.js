@@ -111,6 +111,7 @@ async function load() {
   renderProgress();
   renderSettings();
   if (window.renderHealthHub) window.renderHealthHub().catch(error => console.warn("Health sections failed to load", error));
+  if (window.renderAssistant) window.renderAssistant().catch(error => console.warn("Calendar sections failed to load", error));
 }
 
 function planKicker(plan) {

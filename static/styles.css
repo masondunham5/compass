@@ -470,6 +470,27 @@ button.habit { cursor: pointer; }
 .not-today { display: flex; gap: 8px; justify-content: center; margin-top: 4px; }
 .not-today button { border: 0; background: none; color: var(--muted); font-size: .92rem; padding: 6px 8px; text-decoration: underline; text-underline-offset: 3px; }
 
+/* ---------- Assistant: agenda and calendars ---------- */
+.agenda-card { margin-top: 14px; }
+.agenda-card .agenda-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.agenda-card h3 { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.agenda-card .agenda-head span { color: var(--faint); font-size: .85rem; }
+.agenda-list { margin: 0; padding: 0; list-style: none; }
+.agenda-list li { display: grid; grid-template-columns: 84px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: .95rem; }
+.agenda-list li:first-child { border-top: 0; }
+.agenda-list time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .88rem; }
+.agenda-list small { display: block; color: var(--faint); font-size: .82rem; }
+.agenda-list li.free time, .agenda-list li.free b { color: var(--faint); font-weight: 500; }
+.agenda-list li.exam b { color: var(--amber); }
+.agenda-list li.workout b { color: var(--accent); }
+.best-slot { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-weight: 650; font-size: .92rem; }
+.file-button { cursor: pointer; }
+.feed { padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
+.feed b { display: block; }
+.feed small { display: block; color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.feed .error { color: var(--red); }
+.feed .record-actions { margin-top: 8px; }
+
 /* ---------- Tab bar ---------- */
 .tabbar {
   position: fixed; z-index: 20; left: 0; right: 0; bottom: 0;

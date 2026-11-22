@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui10">
+    <link rel="stylesheet" href="/static/styles.css?v=health-hub-2026-11-21-ui11">
     <title>Health Hub</title>
   </head>
   <body>
@@ -36,6 +36,7 @@
           <div class="week-strip" id="week-strip" role="tablist" aria-label="This week"></div>
           <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
           <div id="today-alerts" class="stack alert-stack"></div>
+          <article class="card agenda-card" id="agenda-card" hidden></article>
           <div id="today-extra"></div>
           <p class="caption" id="today-stats-caption" hidden></p>
           <button class="card stat-strip" id="today-stats" type="button" aria-label="Open recovery details"></button>
@@ -142,6 +143,18 @@
             <form id="settings-form" class="inline-form"><input id="settings-bodyweight" type="number" inputmode="decimal" min="60" max="600" step="any" placeholder="lb"><button class="btn btn-ghost" type="submit">Save</button></form>
             <p class="note" id="settings-status" hidden></p>
           </article>
+          <article class="card prose-card" id="calendar-settings">
+            <h3>Calendars</h3>
+            <p>Read-only: Health Hub never changes these calendars. Events are treated as fixed when planning workouts. The link is stored only on this computer and never shown again in full.</p>
+            <div id="calendar-list" class="stack"></div>
+            <form id="calendar-form" class="stack">
+              <label>Name<input id="calendar-name" value="School" maxlength="60" required></label>
+              <label>Calendar link <span>ICS / webcal link from Outlook "Publish a calendar"</span><input id="calendar-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics"></label>
+              <label>Type<select id="calendar-kind"><option value="school">School</option><option value="personal">Personal</option><option value="other">Other</option></select></label>
+              <div class="sheet-actions"><button class="btn btn-primary" type="submit">Add link</button><label class="btn btn-ghost file-button">Upload .ics<input id="calendar-file" type="file" accept=".ics,text/calendar" hidden></label></div>
+              <p class="note" id="calendar-status" hidden></p>
+            </form>
+          </article>
           <article class="card prose-card">
             <h3>Reminders</h3>
             <p>Notifications for your check-in, workout and Garmin's bedtime window. They fire while Health Hub is open or installed in this browser; true background reminders come with phone access.</p>
@@ -217,9 +230,10 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__healthHubBootState = "loading";</script>
-    <script src="/static/app.js?v=health-hub-2026-11-21-ui10" onerror="window.__healthHubBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=health-hub-2026-11-21-ui10"></script>
-    <script src="/static/schedule.js?v=health-hub-2026-11-21-ui10"></script>
+    <script src="/static/app.js?v=health-hub-2026-11-21-ui11" onerror="window.__healthHubBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=health-hub-2026-11-21-ui11"></script>
+    <script src="/static/schedule.js?v=health-hub-2026-11-21-ui11"></script>
+    <script src="/static/assistant.js?v=health-hub-2026-11-21-ui11"></script>
     <script>
       setTimeout(() => {
         if (window.__healthHubBootState === "ready" || window.__healthHubBootState.startsWith("failed:")) return;

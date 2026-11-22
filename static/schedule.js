@@ -49,7 +49,8 @@ async function previewReschedule() {
       ? `<p class="kicker">${plan.changes.length} session${plan.changes.length === 1 ? "" : "s"} will move</p><ul class="move-list">${list(shown)}</ul>${plan.changes.length > shown.length ? `<p class="faint">…and ${plan.changes.length - shown.length} more, keeping the same spacing.</p>` : ""}`
       : `<p class="muted">Nothing would move.</p>`)
       + (plan.skipped.length ? `<p class="kicker" style="margin-top:8px">Staying put</p><ul class="move-list kept">${list(plan.skipped.slice(0, 6))}</ul>` : "")
-      + (plan.conflicts.length ? `<p class="note error">Heads-up: ${plan.conflicts.map(c => `${esc(fmtShort(c.date))} would have ${c.sessions.length} lifting sessions`).join("; ")}. You can still apply, then move one.</p>` : "");
+      + (plan.conflicts.length ? `<p class="note error">Heads-up: ${plan.conflicts.map(c => `${esc(fmtShort(c.date))} would have ${c.sessions.length} lifting sessions`).join("; ")}. You can still apply, then move one.</p>` : "")
+      + (plan.busy_days?.length ? `<p class="note error">Busy on your calendar: ${plan.busy_days.map(d => `${esc(fmtShort(d.date))} (${d.exams.length ? esc(d.exams.join(", ")) : `${d.busy_hours} h of events`})`).join("; ")}.</p>` : "");
     apply.disabled = !plan.changes.length;
     apply.textContent = plan.changes.length ? `Move ${plan.changes.length} session${plan.changes.length === 1 ? "" : "s"}` : "Apply";
   } catch (error) { box.innerHTML = `<p class="note error">${esc(error.message)}</p>`; apply.disabled = true; }

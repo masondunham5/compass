@@ -57,7 +57,9 @@ def plan_moves(db: sqlite3.Connection, moves: list[tuple[str, str]]) -> dict[str
         elif row["session_date"] != new_date:
             changes.append(item)
     changes.sort(key=lambda change: (change["from"], change["title"]))
-    return {"changes": changes, "skipped": skipped, "conflicts": _conflicts(db, changes)}
+    from assistant.availability import day_notes  # calendar heads-ups for the days sessions land on
+    busy = day_notes(db, [change["to"] for change in changes if change["kind"] in ("strength", "run")])
+    return {"changes": changes, "skipped": skipped, "conflicts": _conflicts(db, changes), "busy_days": busy}
 
 
 def _conflicts(db: sqlite3.Connection, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:

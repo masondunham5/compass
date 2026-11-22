@@ -42,14 +42,37 @@ from planning import (  # noqa: F401
 from readiness import CheckIn, deterministic_training_recommendation, health_recommendation, recommendation  # noqa: F401
 
 
+async def _refresh_calendars_forever() -> None:
+    """Keep calendar links fresh: first check shortly after startup, then every 3 hours."""
+    import asyncio
+
+    from assistant import calendars
+
+    def refresh() -> None:
+        with connection() as db:
+            calendars.sync_stale(db)
+
+    await asyncio.sleep(5)
+    while True:
+        try:
+            await asyncio.to_thread(refresh)
+        except Exception:  # noqa: BLE001 — a refresh failure is recorded per feed; never crash the app
+            pass
+        await asyncio.sleep(calendars.STALE_HOURS * 3600)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import asyncio
+
     initialize()
     try:
         auto_backup()
     except (OSError, sqlite3.Error):
         pass  # a failed backup must never stop the app from starting
+    refresher = asyncio.create_task(_refresh_calendars_forever())
     yield
+    refresher.cancel()
 
 
 app = FastAPI(
@@ -64,6 +87,10 @@ app = FastAPI(
 import health_api  # noqa: E402  (routes for the health features)
 
 app.include_router(health_api.router)
+
+from assistant import routes as assistant_routes  # noqa: E402  (calendars, agenda)
+
+app.include_router(assistant_routes.router)
 
 
 
@@ -1340,7 +1367,7 @@ class ScheduleRequest(BaseModel):
 
 
 def _schedule_plan(db: sqlite3.Connection, request: ScheduleRequest) -> dict[str, Any]:
-    import schedule
+    from assistant import schedule
     try:
         if request.action == "move":
             if not request.session_id or not request.to_date:
@@ -1367,21 +1394,21 @@ def preview_schedule(request: ScheduleRequest) -> dict[str, Any]:
 
 @app.post("/api/schedule/apply")
 def apply_schedule(request: ScheduleRequest) -> dict[str, Any]:
-    import schedule
+    from assistant import schedule
     with connection() as db:
         return schedule.apply_moves(db, _schedule_plan(db, request))
 
 
 @app.post("/api/schedule/undo")
 def undo_schedule() -> dict[str, Any]:
-    import schedule
+    from assistant import schedule
     with connection() as db:
         return schedule.undo_last(db)
 
 
 @app.get("/api/schedule/last")
 def last_schedule_change() -> dict[str, Any]:
-    import schedule
+    from assistant import schedule
     with connection() as db:
         return {"summary": schedule.last_change(db)}
 
