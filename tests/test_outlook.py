@@ -18,6 +18,9 @@ import core  # noqa: E402
 from assistant import outlook  # noqa: E402
 
 TODAY = date.today()
+# Microsoft Graph's calendarColor enum (there is no purple).
+GRAPH_CALENDAR_COLORS = {"auto", "lightBlue", "lightGreen", "lightOrange", "lightGray", "lightYellow",
+                         "lightTeal", "lightPink", "lightBrown", "lightRed", "maxColor"}
 
 
 class FakeGraph:
@@ -39,6 +42,8 @@ class FakeGraph:
             if len(parts) == 2 and method == "GET":
                 return 200, json.dumps({"value": [{"id": i, "name": n} for i, n in self.calendars.items()]}).encode()
             if len(parts) == 2 and method == "POST":
+                if payload.get("color", "auto") not in GRAPH_CALENDAR_COLORS:  # Graph rejects unknown enum values
+                    return 400, json.dumps({"error": {"message": f"Requested value '{payload['color']}' was not found."}}).encode()
                 self.counter += 1
                 cid = f"cal{self.counter}"
                 self.calendars[cid] = payload["name"]

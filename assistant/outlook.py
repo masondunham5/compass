@@ -247,7 +247,7 @@ def _calendar_id(db: sqlite3.Connection, graph: Graph) -> str:
     _, data = graph.call("GET", "/me/calendars?$select=id,name&$top=100")
     found = next((c["id"] for c in (data or {}).get("value", []) if c.get("name") == CALENDAR_NAME), None)
     if not found:
-        _, created = graph.call("POST", "/me/calendars", {"name": CALENDAR_NAME, "color": "lightPurple"})
+        _, created = graph.call("POST", "/me/calendars", {"name": CALENDAR_NAME, "color": "lightTeal"})
         found = created["id"]
     _set(db, "outlook_calendar_id", found)
     return found
