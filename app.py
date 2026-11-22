@@ -43,22 +43,23 @@ from readiness import CheckIn, deterministic_training_recommendation, health_rec
 
 
 async def _refresh_calendars_forever() -> None:
-    """Keep calendar links fresh: first check shortly after startup, then every 3 hours."""
+    """Every 30 min: refresh calendar links that are 3+ hours old, then push the plan to Outlook (if connected)."""
     import asyncio
 
-    from assistant import calendars
+    from assistant import calendars, outlook
 
     def refresh() -> None:
         with connection() as db:
             calendars.sync_stale(db)
+        outlook.sync_quietly()
 
     await asyncio.sleep(5)
     while True:
         try:
             await asyncio.to_thread(refresh)
-        except Exception:  # noqa: BLE001 — a refresh failure is recorded per feed; never crash the app
+        except Exception:  # noqa: BLE001 — failures are recorded per feed / in Outlook status; never crash the app
             pass
-        await asyncio.sleep(calendars.STALE_HOURS * 3600)
+        await asyncio.sleep(30 * 60)
 
 
 @asynccontextmanager
@@ -1396,14 +1397,21 @@ def preview_schedule(request: ScheduleRequest) -> dict[str, Any]:
 def apply_schedule(request: ScheduleRequest) -> dict[str, Any]:
     from assistant import schedule
     with connection() as db:
-        return schedule.apply_moves(db, _schedule_plan(db, request))
+        result = schedule.apply_moves(db, _schedule_plan(db, request))
+    from assistant import outlook, planner
+    with connection() as db:
+        planner.cleanup(db)  # drop accepted workout blocks whose session moved
+    outlook.sync_soon()
+    return result
 
 
 @app.post("/api/schedule/undo")
 def undo_schedule() -> dict[str, Any]:
-    from assistant import schedule
+    from assistant import outlook, schedule
     with connection() as db:
-        return schedule.undo_last(db)
+        result = schedule.undo_last(db)
+    outlook.sync_soon()
+    return result
 
 
 @app.get("/api/schedule/last")

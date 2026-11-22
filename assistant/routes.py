@@ -242,17 +242,63 @@ def plan(start: str | None = None, days: int = 7) -> dict[str, Any]:
 
 @router.post("/plan/accept")
 def accept_plan(payload: AcceptRequest) -> dict[str, Any]:
-    from assistant import planner
+    from assistant import outlook, planner
     with connection() as db:
         try:
             saved = planner.accept(db, payload.blocks)
         except (KeyError, ValueError, TypeError) as error:
             raise HTTPException(status_code=400, detail="Those plan blocks are malformed. Rebuild the plan and try again.") from error
+    outlook.sync_soon()
     return {"accepted": saved}
 
 
 @router.post("/plan/unaccept")
 def unaccept_plan(payload: UnacceptRequest) -> dict[str, Any]:
-    from assistant import planner
+    from assistant import outlook, planner
     with connection() as db:
-        return {"removed": planner.unaccept(db, payload.block_id, payload.from_date)}
+        removed = planner.unaccept(db, payload.block_id, payload.from_date)
+    outlook.sync_soon()
+    return {"removed": removed}
+
+
+# ---------------------------------------------------------------- personal Outlook (write-back)
+
+class OutlookConnect(BaseModel):
+    client_id: str = Field(max_length=200)  # start_sign_in checks the GUID shape with a readable message
+
+
+@router.get("/outlook")
+def outlook_status() -> dict[str, Any]:
+    from assistant import outlook
+    with connection() as db:
+        return outlook.status(db)
+
+
+@router.post("/outlook/connect")
+def outlook_connect(payload: OutlookConnect) -> dict[str, Any]:
+    """Start Microsoft's device sign-in; returns the code to enter at microsoft.com/devicelogin."""
+    from assistant import outlook
+    try:
+        return outlook.start_sign_in(payload.client_id)
+    except outlook.OutlookError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/outlook/sync")
+def outlook_sync() -> dict[str, Any]:
+    from assistant import outlook
+    with connection() as db:
+        try:
+            counts = outlook.sync(db)
+        except outlook.OutlookError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {**outlook.status(db), "result": counts}
+
+
+@router.post("/outlook/disconnect")
+def outlook_disconnect() -> dict[str, Any]:
+    """Forget the sign-in on this computer. The Compass calendar stays in Outlook (delete it there if you want)."""
+    from assistant import outlook
+    with connection() as db:
+        outlook.disconnect(db)
+        return outlook.status(db)

@@ -7,6 +7,55 @@ async function renderAssistant() {
   const [agenda, alerts, feeds, todayPlan] = await Promise.all([api("/api/assistant/agenda"), api("/api/assistant/alerts"), api("/api/assistant/calendars"), api("/api/assistant/plan?days=1").catch(() => null)]);
   renderAgenda(agenda, alerts.alerts, todayPlan);
   renderCalendarSettings(feeds.calendars);
+  renderOutlook(await api("/api/assistant/outlook").catch(() => null));
+}
+
+/* ---------------- Personal Outlook (write-back) */
+
+let outlookPoll = null;
+
+function renderOutlook(status) {
+  const box = $("#outlook-body");
+  if (!box || !status) return;
+  clearTimeout(outlookPoll);
+  const signIn = status.sign_in || {};
+  if (signIn.state === "waiting" && !status.connected) {
+    box.innerHTML = `<div class="device-code"><span>Your code</span><b>${esc(signIn.code)}</b></div>
+      <p>1. Open <a href="${esc(signIn.url)}" target="_blank" rel="noopener">${esc(signIn.url.replace(/^https?:\/\//, ""))}</a> and enter the code.<br>2. Sign in with your <b>personal</b> Microsoft account and allow access to your calendars.</p>
+      <p class="faint">Waiting for you to finish… this page updates by itself.</p>`;
+    outlookPoll = setTimeout(async () => renderOutlook(await api("/api/assistant/outlook")), 3000);
+    return;
+  }
+  if (status.connected) {
+    box.innerHTML = `<p><b>Connected</b> as ${esc(status.account || "your account")}.<br>${status.linked_events} event${status.linked_events === 1 ? "" : "s"} in the Compass calendar${status.last_sync ? ` · last sync ${esc(syncTime(status.last_sync))}` : ""}.</p>
+      ${status.last_error ? `<p class="note error">${esc(status.last_error)}</p>` : ""}
+      <p class="faint">Syncs a few seconds after you accept or change plan blocks, and every 30 minutes. Edits made in Outlook are overwritten — change things in Compass.</p>
+      <div class="sheet-actions"><button class="btn btn-primary" type="button" id="outlook-sync">Sync now</button><button class="btn btn-ghost" type="button" id="outlook-disconnect">Disconnect</button></div>
+      <p class="note" id="outlook-status" hidden></p>`;
+    $("#outlook-sync").onclick = async event => {
+      event.target.disabled = true; event.target.textContent = "Syncing…";
+      try {
+        const result = await api("/api/assistant/outlook/sync", { method: "POST" });
+        renderOutlook(result);
+        const r = result.result; const note = $("#outlook-status");
+        note.textContent = `Done: ${r.created} added, ${r.updated} updated, ${r.deleted} removed, ${r.unchanged} unchanged.`; note.hidden = false;
+      } catch (error) { const note = $("#outlook-status"); note.textContent = error.message; note.classList.add("error"); note.hidden = false; event.target.disabled = false; event.target.textContent = "Sync now"; }
+    };
+    $("#outlook-disconnect").onclick = async () => {
+      if (!confirm("Disconnect Outlook on this computer? The Compass calendar stays in Outlook; delete it there if you want.")) return;
+      renderOutlook(await api("/api/assistant/outlook/disconnect", { method: "POST" }));
+    };
+    return;
+  }
+  box.innerHTML = `${signIn.state === "error" ? `<p class="note error">${esc(signIn.message)}</p>` : ""}
+    <p class="faint">One-time setup: create a free app registration in the Azure portal (personal Microsoft accounts, “Allow public client flows” on, delegated Calendars.ReadWrite). Paste its <b>Application (client) ID</b> here — it isn't a password.</p>
+    <form id="outlook-form" class="inline-form"><input id="outlook-client" placeholder="Application (client) ID" autocomplete="off" spellcheck="false" required><button class="btn btn-primary" type="submit">Connect</button></form>
+    <p class="note error" id="outlook-error" hidden></p>`;
+  $("#outlook-form").onsubmit = async event => {
+    event.preventDefault();
+    try { renderOutlook({ connected: false, sign_in: await api("/api/assistant/outlook/connect", { method: "POST", body: JSON.stringify({ client_id: $("#outlook-client").value.trim() }) }) }); }
+    catch (error) { $("#outlook-error").textContent = error.message; $("#outlook-error").hidden = false; }
+  };
 }
 window.renderAssistant = renderAssistant;
 

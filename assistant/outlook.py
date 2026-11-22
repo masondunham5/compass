@@ -1,0 +1,325 @@
+"""Write accepted plan blocks into a dedicated "Compass" calendar in a personal Outlook account.
+
+- Sign-in uses Microsoft's device-code flow (MSAL): Compass shows a short code, you enter it at
+  microsoft.com/devicelogin and sign in there. Compass never sees your password.
+- Needs an app registration's *client ID* (public, not a secret) with delegated
+  Calendars.ReadWrite + User.Read and "Allow public client flows" enabled.
+- The token cache is stored in data/outlook_token.bin, encrypted with Windows DPAPI (only this
+  Windows user on this computer can read it). data/ is never committed.
+- Sync is one-way and only ever touches the "Compass" calendar it created: events for blocks
+  that no longer exist are deleted; edits made in Outlook are overwritten on the next sync.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import json
+import sqlite3
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+import core
+
+GRAPH = "https://graph.microsoft.com/v1.0"
+AUTHORITY = "https://login.microsoftonline.com/consumers"
+SCOPES = ["Calendars.ReadWrite", "User.Read"]
+CALENDAR_NAME = "Compass"
+WINDOW_BACK, WINDOW_AHEAD = 1, 21
+KIND_LABEL = {"study": "Study", "review": "Review", "workout": "Workout"}
+
+
+class OutlookError(RuntimeError):
+    """User-facing; never contains tokens."""
+
+
+def ensure_schema(db: sqlite3.Connection) -> None:
+    db.execute(
+        """CREATE TABLE IF NOT EXISTS outlook_links (
+               block_id TEXT PRIMARY KEY, event_id TEXT NOT NULL, fingerprint TEXT NOT NULL, synced_at TEXT NOT NULL
+           )"""
+    )
+
+
+# ---------------------------------------------------------------- settings + encrypted token cache
+
+def _setting(db: sqlite3.Connection, key: str) -> str | None:
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _set(db: sqlite3.Connection, key: str, value: str | None) -> None:
+    if value is None:
+        db.execute("DELETE FROM settings WHERE key = ?", (key,))
+    else:
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def _token_path() -> Path:
+    return core.DATA_DIR / "outlook_token.bin"
+
+
+class _Blob(ctypes.Structure):
+    _fields_ = [("cbData", ctypes.c_uint32), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    """Encrypt/decrypt with Windows DPAPI (current user). Elsewhere, store as-is."""
+    if sys.platform != "win32":
+        return data
+    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
+    buffer = ctypes.create_string_buffer(data, len(data))
+    source, result = _Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char))), _Blob()
+    call = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    if not call(ctypes.byref(source), None, None, None, None, 0, ctypes.byref(result)):
+        raise OutlookError("Windows couldn't protect the Outlook sign-in. Disconnect and connect again.")
+    try:
+        return ctypes.string_at(result.pbData, result.cbData)
+    finally:
+        kernel32.LocalFree(result.pbData)
+
+
+def _load_cache():
+    import msal
+    cache = msal.SerializableTokenCache()
+    path = _token_path()
+    if path.exists():
+        try:
+            cache.deserialize(_dpapi(path.read_bytes(), protect=False).decode("utf-8"))
+        except (OSError, OutlookError, UnicodeDecodeError, ValueError):
+            pass  # unreadable cache = signed out
+    return cache
+
+
+def _save_cache(cache) -> None:
+    if cache.has_state_changed:
+        path = _token_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_dpapi(cache.serialize().encode("utf-8"), protect=True))
+
+
+def _app(client_id: str, cache):
+    import msal
+    return msal.PublicClientApplication(client_id, authority=AUTHORITY, token_cache=cache)
+
+
+# ---------------------------------------------------------------- sign-in (device code)
+
+_pending: dict[str, Any] = {}
+_lock = threading.Lock()
+
+
+def start_sign_in(client_id: str) -> dict[str, Any]:
+    client_id = client_id.strip()
+    if len(client_id) < 30 or any(ch not in "0123456789abcdefABCDEF-" for ch in client_id):
+        raise OutlookError("That doesn't look like an Application (client) ID. It's a GUID like 1a2b3c4d-....")
+    cache = _load_cache()
+    app = _app(client_id, cache)
+    flow = app.initiate_device_flow(scopes=SCOPES)
+    if "user_code" not in flow:
+        detail = flow.get("error_description", "").split("\r\n")[0][:200]
+        raise OutlookError(f"Microsoft rejected the sign-in request. Check the app registration (personal accounts, public client flows). {detail}")
+    with _lock:
+        _pending.clear()
+        _pending.update({"state": "waiting", "client_id": client_id, "code": flow["user_code"], "url": flow["verification_uri"],
+                         "expires_at": time.time() + int(flow.get("expires_in", 900))})
+
+    def wait() -> None:
+        result = app.acquire_token_by_device_flow(flow)  # blocks until you finish signing in (or it expires)
+        with _lock:
+            if "access_token" in result:
+                _save_cache(cache)
+                account = (result.get("id_token_claims") or {}).get("preferred_username") or "your account"
+                with core.connection() as db:
+                    _set(db, "outlook_client_id", client_id)
+                    _set(db, "outlook_account", account)
+                _pending.update({"state": "connected", "account": account})
+            else:
+                _pending.update({"state": "error", "message": (result.get("error_description") or "Sign-in didn't finish.").split("\r\n")[0][:200]})
+
+    threading.Thread(target=wait, name="outlook-sign-in", daemon=True).start()
+    return sign_in_status()
+
+
+def sign_in_status() -> dict[str, Any]:
+    with _lock:
+        return {key: value for key, value in _pending.items() if key != "client_id"}
+
+
+def _access_token(db: sqlite3.Connection) -> str:
+    client_id = _setting(db, "outlook_client_id")
+    if not client_id:
+        raise OutlookError("Outlook isn't connected.")
+    cache = _load_cache()
+    app = _app(client_id, cache)
+    accounts = app.get_accounts()
+    result = app.acquire_token_silent(SCOPES, account=accounts[0]) if accounts else None
+    if not result or "access_token" not in result:
+        raise OutlookError("Outlook sign-in expired. Connect again in More → Calendars.")
+    _save_cache(cache)
+    return result["access_token"]
+
+
+def disconnect(db: sqlite3.Connection) -> None:
+    _token_path().unlink(missing_ok=True)
+    for key in ("outlook_client_id", "outlook_account", "outlook_calendar_id", "outlook_last_sync", "outlook_last_error"):
+        _set(db, key, None)
+    db.execute("DELETE FROM outlook_links")
+
+
+# ---------------------------------------------------------------- Microsoft Graph
+
+Transport = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes]]
+
+
+def _urllib_transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> tuple[int, bytes]:
+    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read() or b""
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise OutlookError("Couldn't reach Microsoft. Check this computer's internet connection.") from error
+
+
+class Graph:
+    def __init__(self, token: str, transport: Transport | None = None):
+        self.token, self.transport = token, transport or _urllib_transport
+
+    def call(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, Any]:
+        url = path if path.startswith("http") else f"{GRAPH}{path}"
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+        body = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(payload).encode()
+        for attempt in range(3):
+            status, raw = self.transport(method, url, headers, body)
+            if status == 429 or status >= 500:
+                time.sleep(min(10, 2 ** attempt))
+                continue
+            break
+        data = json.loads(raw) if raw else None
+        if status in (401, 403):
+            raise OutlookError("Microsoft refused access. Check the app has Calendars.ReadWrite, then connect again.")
+        if status >= 400 and status != 404:
+            message = ((data or {}).get("error") or {}).get("message", "") if isinstance(data, dict) else ""
+            raise OutlookError(f"Outlook returned an error ({status}). {message[:160]}".strip())
+        return status, data
+
+
+# ---------------------------------------------------------------- sync
+
+def _utc(block_date: str, minutes: int) -> str:
+    local = datetime.combine(date.fromisoformat(block_date), datetime.min.time()) + timedelta(minutes=minutes)
+    return local.astimezone().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def event_for(block: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "subject": f"{KIND_LABEL.get(block['kind'], 'Plan')}: {block['title']}",
+        "start": {"dateTime": _utc(block["block_date"], block["start"]), "timeZone": "UTC"},
+        "end": {"dateTime": _utc(block["block_date"], block["end"]), "timeZone": "UTC"},
+        "body": {"contentType": "text", "content": "Planned in Compass. Change or remove it in Compass — edits made here are overwritten on the next sync."},
+        "showAs": "busy", "isReminderOn": True, "reminderMinutesBeforeStart": 10,
+    }
+
+
+def _fingerprint(event: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps([event["subject"], event["start"], event["end"]], sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _calendar_id(db: sqlite3.Connection, graph: Graph) -> str:
+    saved = _setting(db, "outlook_calendar_id")
+    if saved:
+        status, _ = graph.call("GET", f"/me/calendars/{urllib.parse.quote(saved)}?$select=id")
+        if status != 404:
+            return saved
+        db.execute("DELETE FROM outlook_links")  # calendar was deleted in Outlook; start over
+    _, data = graph.call("GET", "/me/calendars?$select=id,name&$top=100")
+    found = next((c["id"] for c in (data or {}).get("value", []) if c.get("name") == CALENDAR_NAME), None)
+    if not found:
+        _, created = graph.call("POST", "/me/calendars", {"name": CALENDAR_NAME, "color": "lightPurple"})
+        found = created["id"]
+    _set(db, "outlook_calendar_id", found)
+    return found
+
+
+def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date | None = None) -> dict[str, Any]:
+    """Make the Compass calendar match accepted plan blocks from yesterday through three weeks out."""
+    today = today or date.today()
+    graph = Graph(_access_token(db), transport)
+    calendar = _calendar_id(db, graph)
+    start, end = (today - timedelta(days=WINDOW_BACK)).isoformat(), (today + timedelta(days=WINDOW_AHEAD)).isoformat()
+    blocks = {row["id"]: dict(row) for row in db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (start, end))}
+    links = {row["block_id"]: dict(row) for row in db.execute("SELECT * FROM outlook_links")}
+    all_blocks = {row[0] for row in db.execute("SELECT id FROM plan_blocks")}
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    counts = {"created": 0, "updated": 0, "deleted": 0, "unchanged": 0}
+    for block_id, link in links.items():  # removed in Compass -> remove from Outlook
+        if block_id not in all_blocks:
+            graph.call("DELETE", f"/me/events/{urllib.parse.quote(link['event_id'])}")
+            db.execute("DELETE FROM outlook_links WHERE block_id = ?", (block_id,))
+            counts["deleted"] += 1
+    for block_id, block in blocks.items():
+        event = event_for(block)
+        fingerprint = _fingerprint(event)
+        link = links.get(block_id)
+        if link and link["fingerprint"] == fingerprint:
+            counts["unchanged"] += 1
+            continue
+        if link:
+            status, _ = graph.call("PATCH", f"/me/events/{urllib.parse.quote(link['event_id'])}", event)
+            if status != 404:
+                db.execute("UPDATE outlook_links SET fingerprint = ?, synced_at = ? WHERE block_id = ?", (fingerprint, now, block_id))
+                counts["updated"] += 1
+                continue
+        _, created = graph.call("POST", f"/me/calendars/{urllib.parse.quote(calendar)}/events", event)
+        db.execute("INSERT OR REPLACE INTO outlook_links (block_id, event_id, fingerprint, synced_at) VALUES (?, ?, ?, ?)", (block_id, created["id"], fingerprint, now))
+        counts["created"] += 1
+    _set(db, "outlook_last_sync", now)
+    _set(db, "outlook_last_error", None)
+    return counts
+
+
+def status(db: sqlite3.Connection) -> dict[str, Any]:
+    connected = bool(_setting(db, "outlook_client_id")) and _token_path().exists()
+    return {"connected": connected, "account": _setting(db, "outlook_account"), "last_sync": _setting(db, "outlook_last_sync"),
+            "last_error": _setting(db, "outlook_last_error"), "linked_events": db.execute("SELECT COUNT(*) FROM outlook_links").fetchone()[0],
+            "sign_in": sign_in_status()}
+
+
+def sync_quietly() -> dict[str, Any] | None:
+    """Sync if connected; record (don't raise) errors. Used by the background loop and after plan changes."""
+    with core.connection() as db:
+        if not status(db)["connected"]:
+            return None
+        try:
+            return sync(db)
+        except OutlookError as error:
+            _set(db, "outlook_last_error", str(error))
+            return None
+
+
+_soon_timer: threading.Timer | None = None
+
+
+def sync_soon(delay: float = 5.0) -> None:
+    """Debounced background sync after the plan changes (several quick edits -> one sync)."""
+    global _soon_timer
+    with core.connection() as db:
+        if not status(db)["connected"]:
+            return  # nothing to do, and no timer left behind
+    if _soon_timer:
+        _soon_timer.cancel()
+    _soon_timer = threading.Timer(delay, sync_quietly)
+    _soon_timer.daemon = True
+    _soon_timer.start()

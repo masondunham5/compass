@@ -20,7 +20,12 @@ async function api(path, options = {}) {
   const response = await fetch(path, { headers, ...options });
   if (!response.ok) {
     let message = "Could not save your change.";
-    try { message = (await response.json()).detail || message; } catch { /* not JSON */ }
+    try {
+      const detail = (await response.json()).detail;
+      // FastAPI validation errors (422) send a list of {loc, msg}; show the first readable one.
+      if (Array.isArray(detail)) message = detail.map((item) => item.msg).filter(Boolean)[0] || message;
+      else if (typeof detail === "string" && detail) message = detail;
+    } catch { /* not JSON */ }
     throw new Error(message);
   }
   return response.json();

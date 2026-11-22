@@ -5,3 +5,5 @@ pytest>=8.0,<9.0
 # Calendar import (assistant/): parse .ics and expand repeating events
 icalendar>=6,<8
 recurring-ical-events>=3.3,<4
+# Personal Outlook write-back (assistant/outlook.py): Microsoft sign-in
+msal>=1.28,<2
