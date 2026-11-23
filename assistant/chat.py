@@ -338,7 +338,7 @@ def _schedule_card(kind: str, args: dict[str, Any], plan: dict[str, Any], summar
         raise ChatError(f"That wouldn't move anything ({reasons}).")
     details = [f"{c['title']}: {_nice(c['from'])} → {_nice(c['to'])}" for c in plan["changes"]]
     details += [f"Stays: {s.get('title', s['id'])} ({s['reason']})" for s in plan["skipped"]]
-    warning = "; ".join(f"{_nice(c['date'])} would have {len(c['sessions'])} lifting sessions" for c in plan.get("conflicts", []))
+    warning = " ".join([f"{_nice(c['date'])} would have {len(c['sessions'])} lifting sessions." for c in plan.get("conflicts", [])] + plan.get("spacing", []))
     return _store(kind, args, summary, details, warning)
 
 

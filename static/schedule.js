@@ -67,6 +67,7 @@ async function previewReschedule() {
       : `<p class="muted">Nothing would move.</p>`)
       + (plan.skipped.length ? `<p class="kicker" style="margin-top:8px">Staying put</p><ul class="move-list kept">${list(plan.skipped.slice(0, 6))}</ul>` : "")
       + (plan.conflicts.length ? `<p class="note error">Heads-up: ${plan.conflicts.map(c => `${esc(fmtShort(c.date))} would have ${c.sessions.length} lifting sessions`).join("; ")}. You can still apply, then move one.</p>` : "")
+      + (plan.spacing?.length ? `<p class="note error">${plan.spacing.map(esc).join("<br>")}</p>` : "")
       + (plan.busy_days?.length ? `<p class="note error">Busy on your calendar: ${plan.busy_days.map(d => `${esc(fmtShort(d.date))} (${d.exams.length ? esc(d.exams.join(", ")) : `${d.busy_hours} h of events`})`).join("; ")}.</p>` : "");
     apply.disabled = !plan.changes.length;
     apply.textContent = plan.changes.length ? `Move ${plan.changes.length} session${plan.changes.length === 1 ? "" : "s"}` : "Apply";

@@ -60,7 +60,9 @@ def plan_moves(db: sqlite3.Connection, moves: list[tuple[str, str]]) -> dict[str
     changes.sort(key=lambda change: (change["from"], change["title"]))
     from assistant.availability import day_notes  # calendar heads-ups for the days sessions land on
     busy = day_notes(db, [change["to"] for change in changes if change["kind"] in ("strength", "run")])
-    return {"changes": changes, "skipped": skipped, "conflicts": _conflicts(db, changes), "busy_days": busy}
+    from assistant.runprep import spacing_issues  # long run after legs, hard days back to back, …
+    return {"changes": changes, "skipped": skipped, "conflicts": _conflicts(db, changes), "busy_days": busy,
+            "spacing": spacing_issues(db, changes)}
 
 
 def _conflicts(db: sqlite3.Connection, changes: list[dict[str, Any]]) -> list[dict[str, Any]]:

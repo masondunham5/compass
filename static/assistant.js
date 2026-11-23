@@ -7,6 +7,7 @@ async function renderAssistant() {
   const [agenda, alerts, feeds, todayPlan] = await Promise.all([api("/api/assistant/agenda"), api("/api/assistant/alerts"), api("/api/assistant/calendars"), api("/api/assistant/plan?days=1").catch(() => null)]);
   renderAgenda(agenda, alerts.alerts, todayPlan);
   if (window.renderCheckin) window.renderCheckin("#checkin-today");
+  renderFuel();
   renderCalendarSettings(feeds.calendars);
   renderOutlook(await api("/api/assistant/outlook").catch(() => null));
 }
@@ -87,6 +88,17 @@ function renderAgenda(agenda, alerts, todayPlan = null) {
   const review = $("#review-today-plan");
   if (review) review.onclick = () => selectView("week");
 }
+/* Fuel & prep: follows wherever runs actually are (today, tonight for tomorrow, a heads-up). */
+async function renderFuel() {
+  const box = $("#fuel-today");
+  if (!box) return;
+  let cards = [];
+  try { cards = (await api("/api/assistant/fuel")).cards; } catch { /* optional */ }
+  box.innerHTML = cards.length ? `<article class="card fuel-card"><div class="agenda-head"><h3>Fuel &amp; prep</h3><span>for your runs</span></div>
+    ${cards.map(card => `<section><p class="kicker">${esc(card.when)}</p><b>${esc(card.title)}</b><ul>${card.items.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>`).join("")}
+    <p class="faint">General guidance that moves with your runs — not medical advice.</p></article>` : "";
+}
+
 const KIND_LABEL_SHORT = { study: "study", review: "exam review", workout: "workout", task: "to-do", move: "move" };
 
 function renderCalendarSettings(feeds) {

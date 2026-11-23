@@ -381,7 +381,10 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                               "minutes": session["minutes"]})
             items.sort(key=lambda item: (not item["all_day"], item["start"], item["end"]))
             out.append({"date": iso, "items": items})
-        return {"start": first.isoformat(), "days": out, "warnings": (plan or {}).get("warnings", []) + travel_warnings, "draft_count": len(draft_blocks)}
+        from assistant.runprep import spacing_issues
+        spacing = spacing_issues(db, [], window=(max(first, today), last)) if last >= today else []
+        return {"start": first.isoformat(), "days": out, "warnings": (plan or {}).get("warnings", []) + travel_warnings + spacing,
+                "draft_count": len(draft_blocks)}
 
 
 def _directions(location: str, place: dict[str, Any] | None) -> str:
@@ -433,6 +436,14 @@ def _places_payload(db) -> dict[str, Any]:
             "kinds": places.KINDS, "home_for": places.HOME_FOR, "today_term": places.term_on(db, date.today()),
             "has_terms": bool(db.execute("SELECT 1 FROM terms LIMIT 1").fetchone()),
             "unmatched": places.unmatched_locations(db, date.today())}
+
+
+@router.get("/fuel")
+def fuel_cards() -> dict[str, Any]:
+    """Fuel & prep for runs today, tonight (for tomorrow) and the next few days, from the real schedule."""
+    from assistant import runprep
+    with connection() as db:
+        return {"cards": runprep.cards(db)}
 
 
 @router.get("/places")
