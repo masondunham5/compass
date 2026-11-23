@@ -409,6 +409,12 @@ class TravelRequest(BaseModel):
     minutes: int | None = Field(default=None, ge=0, le=240)
 
 
+class ParkingRequest(BaseModel):
+    parking_id: str
+    walk: int | None = Field(default=None, ge=0, le=60)
+    preferred: bool | None = None
+
+
 class PlaceSettings(BaseModel):
     mode: str | None = Field(default=None, pattern="^(drive|walk|bike)$")
     lift_place_school: str | None = None   # place id; "" = at home
@@ -422,7 +428,7 @@ class AllDayRequest(BaseModel):
 
 def _places_payload(db) -> dict[str, Any]:
     from assistant import places
-    return {"places": places.list_places(db), "travel": places.travel_list(db), "mode": places.mode(db),
+    return {"places": places.list_places(db), "travel": places.travel_list(db), "parking": places.parking_list(db), "mode": places.mode(db),
             "lift_place_school": places.lift_place(db, "school") or "", "lift_place_break": places.lift_place(db, "break") or "",
             "kinds": places.KINDS, "home_for": places.HOME_FOR, "today_term": places.term_on(db, date.today()),
             "has_terms": bool(db.execute("SELECT 1 FROM terms LIMIT 1").fetchone()),
@@ -464,6 +470,28 @@ def remove_place(place_id: str) -> dict[str, Any]:
     from assistant import places
     with connection() as db:
         places.delete_place(db, place_id)
+        return _places_payload(db)
+
+
+@router.put("/places/{place_id}/parking")
+def set_parking(place_id: str, payload: ParkingRequest) -> dict[str, Any]:
+    """Where you park for a place, and the walk from there."""
+    from assistant import places
+    with connection() as db:
+        try:
+            places.set_parking(db, place_id, payload.parking_id, payload.walk, payload.preferred)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="That place doesn't exist any more.") from error
+        except places.PlaceError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return _places_payload(db)
+
+
+@router.delete("/places/{place_id}/parking/{parking_id}")
+def remove_parking(place_id: str, parking_id: str) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        places.remove_parking(db, place_id, parking_id)
         return _places_payload(db)
 
 

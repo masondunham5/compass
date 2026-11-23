@@ -25,7 +25,8 @@ function placesRender(data) {
   const editing = data.places.find(p => p.id === placesState.editing) || null;
   const list = data.places.length
     ? data.places.map(p => `<div class="row-item"><div class="grow"><b>${esc(p.name)} <span class="muted">· ${esc(kinds[p.kind] || p.kind)}${p.kind === "home" && p.home_for !== "always" ? ` ${esc(data.home_for[p.home_for].toLowerCase())}` : ""}</span></b>
-        <small>${esc(p.address || "No address yet")}${p.keywords ? ` · matches: ${esc(p.keywords)}` : ""}${p.extra ? ` · +${p.extra} min to park/walk` : ""}</small></div>
+        <small>${esc(p.address || "No address yet")}${p.keywords ? ` · matches: ${esc(p.keywords)}` : ""}${p.extra && !(data.parking[p.id] || []).length ? ` · +${p.extra} min to park/walk` : ""}</small>
+        ${placesParking(p, data)}</div>
         <div class="record-actions"><button type="button" data-place-edit="${esc(p.id)}">Edit</button><button type="button" data-place-remove="${esc(p.id)}">Remove</button></div></div>`).join("")
     : `<p class="muted">Start with your home (your apartment during school terms, and your family home during breaks), then add Campus, Work and anywhere else you go.</p>`;
   const homes = data.places.filter(p => p.kind === "home" && p.id !== placesState.editing).map(p => p.home_for);
@@ -79,6 +80,20 @@ function placesRender(data) {
   const cancel = $("#place-cancel");
   if (cancel) cancel.onclick = () => { placesState.editing = null; placesRender(placesState.data); };
   box.querySelectorAll("[data-place-edit]").forEach(button => button.onclick = () => { placesState.editing = button.dataset.placeEdit; placesRender(placesState.data); $("#place-name").focus(); });
+  const parkingCall = async (placeId, body) => placesRender(await api(`/api/assistant/places/${encodeURIComponent(placeId)}/parking`, { method: "PUT", body: JSON.stringify(body) }));
+  box.querySelectorAll("[data-parking-add]").forEach(select => select.onchange = () => select.value && parkingCall(select.dataset.parkingAdd, { parking_id: select.value }).catch(error => alert(error.message)));
+  box.querySelectorAll("[data-parking-walk]").forEach(input => input.onchange = () => {
+    const [placeId, parkingId] = input.dataset.parkingWalk.split("|");
+    parkingCall(placeId, { parking_id: parkingId, walk: input.value === "" ? null : Number(input.value) }).catch(error => alert(error.message));
+  });
+  box.querySelectorAll("[data-parking-usual]").forEach(input => input.onchange = () => {
+    const [placeId, parkingId] = input.dataset.parkingUsual.split("|");
+    parkingCall(placeId, { parking_id: parkingId, preferred: input.checked }).catch(error => alert(error.message));
+  });
+  box.querySelectorAll("[data-parking-remove]").forEach(button => button.onclick = async () => {
+    const [placeId, parkingId] = button.dataset.parkingRemove.split("|");
+    placesRender(await api(`/api/assistant/places/${encodeURIComponent(placeId)}/parking/${encodeURIComponent(parkingId)}`, { method: "DELETE" }));
+  });
   box.querySelectorAll("[data-place-remove]").forEach(button => button.onclick = async () => {
     const place = data.places.find(p => p.id === button.dataset.placeRemove);
     if (confirm(`Remove ${place.name}? Its travel times go too.`)) placesRender(await api(`/api/assistant/places/${encodeURIComponent(place.id)}`, { method: "DELETE" }));
@@ -112,6 +127,20 @@ function placesRender(data) {
     const keywords = [place.keywords, keyword].filter(Boolean).join(", ");
     placesRender(await api(`/api/assistant/places/${encodeURIComponent(place.id)}`, { method: "PATCH", body: JSON.stringify({ keywords }) }));
   });
+}
+
+/* "Park at" for a place: its parking spots, the walk from each, and which one you usually use. */
+function placesParking(place, data) {
+  if (place.kind === "parking" || place.kind === "home") return "";
+  const spots = data.places.filter(p => p.kind === "parking");
+  if (!spots.length) return "";
+  const mine = data.parking[place.id] || [];
+  const free = spots.filter(spot => !mine.some(m => m.parking_id === spot.id));
+  return `<div class="parking-list">${mine.map(m => `<div class="parking-row"><span>Park at <b>${esc(m.name)}</b></span>
+      <label class="inline-num"><input type="number" min="0" max="60" inputmode="numeric" value="${m.walk ?? ""}" placeholder="?" data-parking-walk="${esc(place.id)}|${esc(m.parking_id)}"> min walk${m.walk == null ? " (estimate from the map)" : m.manual ? "" : " (estimated)"}</label>
+      <label class="inline-check"><input type="radio" name="usual-${esc(place.id)}" ${m.preferred ? "checked" : ""} data-parking-usual="${esc(place.id)}|${esc(m.parking_id)}"> usually</label>
+      <button type="button" class="link-btn" data-parking-remove="${esc(place.id)}|${esc(m.parking_id)}">remove</button></div>`).join("")}
+    ${free.length ? `<select class="parking-add" data-parking-add="${esc(place.id)}"><option value="">+ Where you park…</option>${free.map(spot => `<option value="${esc(spot.id)}">${esc(spot.name)}</option>`).join("")}</select>` : ""}</div>`;
 }
 
 placesLoad();

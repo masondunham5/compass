@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui23">
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-23-ui24">
     <title>Compass</title>
   </head>
   <body>
@@ -298,7 +298,7 @@
     <dialog id="run-editor" class="sheet"><form id="run-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker" id="run-editor-kicker">Edit run</p><h2>Run workout</h2><div class="chip-row" id="run-type-chips"></div><p class="muted" id="run-type-structure"></p><div class="form-grid"><label>Distance <span>miles</span><input id="run-edit-miles" type="number" inputmode="decimal" min=".5" max="50" step="any" required></label><label>Time <span>minutes</span><input id="run-edit-minutes" type="number" inputmode="numeric" min="10" max="360" required></label></div><p class="note" id="run-edit-pace"></p><button class="btn btn-primary full" type="submit">Save run</button></form></dialog>
 
     <!-- Race planner -->
-    <dialog id="race-dialog" class="sheet"><form id="race-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Race planner</p><h2 id="race-dialog-title">Plan a race</h2><label>Race name<input id="race-name" value="Fall Marathon" maxlength="80" required></label><div class="form-grid"><label>Race date<input id="race-date" type="date" required></label><label>Distance<select id="race-distance"><option value="marathon">Marathon</option><option value="half">Half marathon</option><option value="10k">10K</option><option value="5k">5K</option></select></label></div><div class="form-grid"><label>Goal time <span>optional · H:MM</span><input id="race-goal" placeholder="3:45" maxlength="10"></label><label>Peak miles/week <span>optional</span><input id="race-peak" type="number" inputmode="decimal" min="10" max="120" step="any" placeholder="auto"></label></div><label>Current miles/week <span id="race-current-hint">from Garmin, last 4 weeks</span><input id="race-current" type="number" inputmode="decimal" min="0" max="150" step="any"></label><fieldset class="day-picker"><legend>Run days</legend><div id="race-days"></div></fieldset><label>Long run day<select id="race-long-day"><option value="5">Saturday</option><option value="6" selected>Sunday</option></select></label><div id="race-preview" class="race-preview" hidden></div><p id="race-form-status" class="note error" hidden></p><div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-preview-btn">Preview</button><button class="btn btn-primary" type="submit" id="race-save">Save plan</button></div></form></dialog>
+    <dialog id="race-dialog" class="sheet"><form id="race-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Race planner</p><h2 id="race-dialog-title">Plan a race</h2><label>Race name<input id="race-name" value="Fall Marathon" maxlength="80" required></label><div class="form-grid"><label>Race date<input id="race-date" type="date" required></label><label>Distance<select id="race-distance"><option value="marathon">Marathon</option><option value="half">Half marathon</option><option value="10k">10K</option><option value="5k">5K</option></select></label></div><div class="form-grid"><label>Goal time <span>optional · H:MM</span><input id="race-goal" placeholder="3:45" maxlength="10"></label><label>Peak miles/week <span>optional</span><input id="race-peak" type="number" inputmode="decimal" min="10" max="120" step="any" placeholder="auto"></label></div><label>Current miles/week <span id="race-current-hint">from Garmin, last 4 weeks</span><input id="race-current" type="number" inputmode="decimal" min="0" max="150" step="any"></label><fieldset class="day-picker"><legend>Run days</legend><div id="race-days"></div></fieldset><label>Long run day<select id="race-long-day"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6" selected>Sunday</option></select></label><div id="race-preview" class="race-preview" hidden></div><p id="race-form-status" class="note error" hidden></p><div class="sheet-actions"><button class="btn btn-ghost" type="button" id="race-preview-btn">Preview</button><button class="btn btn-primary" type="submit" id="race-save">Save plan</button></div></form></dialog>
     <dialog id="race-sheet" class="sheet"><div id="race-sheet-body"></div></dialog>
 
     <!-- Rescheduling -->
@@ -345,14 +345,14 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__compassBootState = "loading";</script>
-    <script src="/static/app.js?v=compass-2026-11-22-ui23" onerror="window.__compassBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/schedule.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/assistant.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/planner.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/calendar.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/chat.js?v=compass-2026-11-22-ui23"></script>
-    <script src="/static/places.js?v=compass-2026-11-22-ui23"></script>
+    <script src="/static/app.js?v=compass-2026-11-23-ui24" onerror="window.__compassBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/planner.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/calendar.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/chat.js?v=compass-2026-11-23-ui24"></script>
+    <script src="/static/places.js?v=compass-2026-11-23-ui24"></script>
     <script>
       setTimeout(() => {
         if (window.__compassBootState === "ready" || window.__compassBootState.startsWith("failed:")) return;

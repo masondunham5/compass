@@ -102,7 +102,7 @@ function layoutLanes(items) {
 function drawGrid() {
   const days = cal.mode === "day" ? cal.data.days.filter(day => day.date === cal.day) : cal.data.days;
   const timed = days.flatMap(day => day.items.filter(item => !item.all_day));
-  const firstHour = Math.max(0, Math.min(7, ...timed.map(item => Math.floor(item.start / 60))));
+  const firstHour = Math.max(0, Math.min(6, ...timed.map(item => Math.floor(item.start / 60))));  // the day view starts at 6 AM
   const lastHour = Math.min(24, Math.max(22, ...timed.map(item => Math.ceil(item.end / 60))));
   const hours = lastHour - firstHour;
   const today = state.today.today;

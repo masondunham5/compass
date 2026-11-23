@@ -213,3 +213,81 @@ def test_old_single_lifting_place_carries_over(db):
     places._set(db, "lift_place", gym["id"])
     places.ensure_schema(db)
     assert places.lift_place(db, "school") == gym["id"] == places.lift_place(db, "break") and places._setting(db, "lift_place") is None
+
+
+# ---------------------------------------------------------------- parking
+
+def test_parking_spot_plus_walk_and_the_usual_spot(db, campus):
+    business = places.add_place(db, {"name": "Business College", "kind": "campus", "keywords": "Business College, BCC, Eli Broad"})
+    stem = places.add_place(db, {"name": "STEM lot", "kind": "parking", "address": "STEM, East Lansing"})
+    street = places.add_place(db, {"name": "North side street", "kind": "parking", "address": "Side St, East Lansing"})
+    home = campus["home"]
+    places.set_travel(db, home["id"], stem["id"], 12)
+    places.set_travel(db, home["id"], street["id"], 8)
+    places.set_parking(db, business["id"], stem["id"], walk=6)
+    places.set_parking(db, business["id"], street["id"], walk=14)
+    assert places.travel_minutes(db, home, business) == 18          # quickest: STEM 12 + 6 (street is 8 + 14)
+    assert places.travel_minutes(db, business, home) == 18          # walk back to the car, then drive
+    places.set_parking(db, business["id"], street["id"], preferred=True)
+    assert places.travel_minutes(db, home, business) == 22          # you usually park on the street
+    assert [p["name"] for p in places.parking_list(db)[business["id"]]] == ["North side street", "STEM lot"]
+    assert all(business["id"] not in (t["a"], t["b"]) for t in places.travel_list(db))  # reached via parking, not a direct drive
+    with pytest.raises(places.PlaceError):
+        places.set_parking(db, business["id"], home["id"], walk=3)  # Home isn't a parking spot
+    places.remove_parking(db, business["id"], street["id"])
+    assert places.travel_minutes(db, home, business) == 18
+    feed_event(db, "ITM 210", TOMORROW, at(10), at(11), "Eli Broad College of Business")
+    first = places.day_travel(db, TOMORROW, availability.fixed_events(db, TOMORROW))["strips"][0]
+    assert (first["start"], first["to"]) == (at(9, 42), "Business College")
+
+
+def test_walks_from_parking_are_estimated_on_foot(db, campus):
+    business = places.add_place(db, {"name": "Business College", "kind": "campus", "address": "632 Bogue St, East Lansing"})
+    stem = places.add_place(db, {"name": "STEM lot", "kind": "parking", "address": "642 Red Cedar Rd, East Lansing"})
+    places.set_parking(db, business["id"], stem["id"])  # walk unknown: estimate it
+
+    def fake(url):
+        if "nominatim" in url:
+            return [{"lat": "42.72", "lon": "-84.47"}]
+        return {"routes": [{"duration": 400 if "routed-foot" in url else 900}]}
+    places.estimate(db, transport=fake, pause=0)
+    assert places.parking_list(db)[business["id"]][0]["walk"] == 7   # 400 s on foot -> 7 min
+    places.set_parking(db, business["id"], stem["id"], walk=4)        # your number wins from now on
+    places.estimate(db, transport=fake, pause=0)
+    assert places.parking_list(db)[business["id"]][0] == {"parking_id": stem["id"], "name": "STEM lot", "walk": 4, "manual": True, "preferred": False}
+
+
+def test_parking_api(db, campus):
+    business = places.add_place(db, {"name": "Business College", "kind": "campus"})
+    stem = places.add_place(db, {"name": "STEM lot", "kind": "parking"})
+    db.commit()
+    with TestClient(app.app) as client:
+        data = client.put(f"/api/assistant/places/{business['id']}/parking", json={"parking_id": stem["id"], "walk": 5, "preferred": True}).json()
+        assert data["parking"][business["id"]][0]["walk"] == 5
+        assert client.put(f"/api/assistant/places/{business['id']}/parking", json={"parking_id": campus["home"]["id"]}).status_code == 400
+        data = client.delete(f"/api/assistant/places/{business['id']}/parking/{stem['id']}").json()
+        assert data["parking"] == {}
+
+
+# ---------------------------------------------------------------- earliest start, long run day
+
+def test_nothing_is_planned_before_7_30(db):
+    events.add_todo(db, {"title": "Early bird", "minutes": 30, "due_date": TOMORROW.isoformat(), "due_time": "23:00"})
+    db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, locked, source) VALUES ('run', ?, 'run', 'Easy Run', 30, 'planned', 0, 'x')",
+               (TOMORROW.isoformat(),))
+    planner.SETTINGS_BACKUP = dict(planner.SETTINGS)
+    try:
+        planner.SETTINGS["study_start"] = 0  # even if study were allowed any time…
+        blocks = [b for d in planner.build(db, TOMORROW, 1, now=NOW)["days"] for b in d["blocks"]]
+    finally:
+        planner.SETTINGS.update(planner.SETTINGS_BACKUP)
+    assert blocks and min(b["start"] for b in blocks) >= at(7, 30)
+
+
+def test_long_run_can_be_any_day():
+    import race_plan
+    today = date(2026, 11, 23)
+    plan = race_plan.generate_plan(date(2027, 3, 21), "half", 15, [1, 3, 5], 2, today=today)  # long run on Wednesday
+    long_runs = [r for w in plan["weeks"] for r in w["runs"] if r["type"] in ("long", "progression")]
+    assert long_runs and all(date.fromisoformat(r["date"]).weekday() == 2 for r in long_runs)
+    assert plan["summary"]["long_run_day"] == "Wed"

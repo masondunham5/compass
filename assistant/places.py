@@ -16,6 +16,10 @@
   all year (`home_for`), using the terms in More → Work schedule (`work.term_kind`; with no terms
   set, every day is a school day). So an apartment near campus and a family home over break can
   both be set up once. `home_on(places, term)` picks the right one.
+- Parking: a place can have parking spots (other places of kind "parking") with the walk from
+  each. Travel to it is then drive to the spot + walk (and back the same way when leaving); the
+  spot marked "usually" is used for planning, otherwise the quickest. Walks are estimated on
+  foot from the map or typed in. A place with parking spots doesn't use its own "extra" minutes.
 - Workouts: if you lift somewhere other than home (`lift_place_school` / `lift_place_break`),
   strength workouts get travel from and back to that day's home on each side (`workout_padding`).
 Only place addresses are sent to OpenStreetMap, and only when you press Estimate.
@@ -34,7 +38,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Callable
 
-KINDS = {"home": "Home", "campus": "Campus", "work": "Work", "gym": "Gym", "other": "Other"}
+KINDS = {"home": "Home", "campus": "Campus", "work": "Work", "gym": "Gym", "parking": "Parking", "other": "Other"}
 HOME_FOR = {"always": "All year", "school": "During school terms", "break": "During breaks"}
 TERMS = ("school", "break")
 MODES = {"drive": "routed-car", "walk": "routed-foot", "bike": "routed-bike"}
@@ -63,6 +67,9 @@ def ensure_schema(db: sqlite3.Connection) -> None:
                updated_at TEXT NOT NULL, PRIMARY KEY (a, b)
            );"""
     )
+    db.execute("""CREATE TABLE IF NOT EXISTS place_parking (
+                      place_id TEXT NOT NULL, parking_id TEXT NOT NULL, walk INTEGER, manual INTEGER NOT NULL DEFAULT 0,
+                      preferred INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (place_id, parking_id))""")
     if "home_for" not in {row[1] for row in db.execute("PRAGMA table_info(places)")}:
         db.execute("ALTER TABLE places ADD COLUMN home_for TEXT NOT NULL DEFAULT 'always'")
     old_lift = _setting(db, "lift_place")  # before per-term lifting places
@@ -158,6 +165,7 @@ def update_place(db, place_id: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 def delete_place(db, place_id: str) -> bool:
     db.execute("DELETE FROM travel_times WHERE a = ? OR b = ?", (place_id, place_id))
+    db.execute("DELETE FROM place_parking WHERE place_id = ? OR parking_id = ?", (place_id, place_id))
     for term in TERMS:
         if _setting(db, f"lift_place_{term}") == place_id:
             _set(db, f"lift_place_{term}", None)
@@ -206,23 +214,80 @@ def _pair(a: str, b: str) -> tuple[str, str]:
     return (a, b) if a < b else (b, a)
 
 
+class TravelData(dict):
+    """Minutes per place pair, plus where you park for each place (`parking`)."""
+
+    def __init__(self, pairs: dict, parking: dict[str, list[dict[str, Any]]] | None = None):
+        super().__init__(pairs)
+        self.parking = parking or {}
+
+
+def travel_table(db) -> TravelData:
+    lookup = {p["id"]: p for p in list_places(db)}
+    parking: dict[str, list[dict[str, Any]]] = {}
+    for row in db.execute("SELECT * FROM place_parking"):
+        if row["parking_id"] in lookup:
+            parking.setdefault(row["place_id"], []).append({"spot": lookup[row["parking_id"]], "walk": row["walk"], "preferred": bool(row["preferred"])})
+    return TravelData({(row["a"], row["b"]): row["minutes"] for row in db.execute("SELECT * FROM travel_times")}, parking)
+
+
+def _ends(place: dict[str, Any], parking: dict[str, list[dict[str, Any]]], arriving: bool) -> list[tuple[dict[str, Any], int]]:
+    """Where a trip to/from `place` really starts or ends, with the walking on top: its parking spots
+    (only the usual one if marked), or the place itself (plus its extra minutes on arrival)."""
+    spots = [o for o in parking.get(place["id"], []) if o["walk"] is not None]
+    usual = [o for o in spots if o["preferred"]]
+    if spots:
+        return [(o["spot"], int(o["walk"])) for o in (usual or spots)]
+    return [(place, int(place.get("extra") or 0) if arriving else 0)]
+
+
 def travel_minutes(db, a: dict[str, Any] | None, b: dict[str, Any] | None, table: dict | None = None) -> int:
-    """Minutes from place a to place b, including b's extra (parking/walking). 0 if unknown."""
+    """Minutes from place a to place b: walk to the car, drive, park, walk in. 0 if unknown."""
     if not a or not b or a["id"] == b["id"]:
         return 0
-    key = _pair(a["id"], b["id"])
-    if table is not None:
-        base = table.get(key)
-    else:
-        row = db.execute("SELECT minutes FROM travel_times WHERE a = ? AND b = ?", key).fetchone()
-        base = row[0] if row else None
-    if base is None:
-        return 0
-    return int(base) + int(b.get("extra") or 0)
+    table = travel_table(db) if table is None else table
+    parking = getattr(table, "parking", {})
+    best = None
+    for start, walk_out in _ends(a, parking, arriving=False):
+        for end, walk_in in _ends(b, parking, arriving=True):
+            base = 0 if start["id"] == end["id"] else table.get(_pair(start["id"], end["id"]))
+            if base is None:
+                continue
+            total = walk_out + int(base) + walk_in
+            best = total if best is None else min(best, total)
+    return best or 0
 
 
-def travel_table(db) -> dict[tuple[str, str], int]:
-    return {(row["a"], row["b"]): row["minutes"] for row in db.execute("SELECT * FROM travel_times")}
+def set_parking(db, place_id: str, parking_id: str, walk: int | None = None, preferred: bool | None = None) -> None:
+    """Add or change a parking spot for a place. `walk` None = estimate it from the map."""
+    place, spot = get_place(db, place_id), get_place(db, parking_id)
+    if spot["kind"] != "parking":
+        raise PlaceError(f"{spot['name']} isn't a parking spot. Add it as a place of kind Parking.")
+    if place["kind"] == "parking" or place_id == parking_id:
+        raise PlaceError("Parking spots don't have their own parking.")
+    if walk is not None and not 0 <= int(walk) <= 60:
+        raise PlaceError("The walk can be 0–60 minutes.")
+    current = db.execute("SELECT * FROM place_parking WHERE place_id = ? AND parking_id = ?", (place_id, parking_id)).fetchone()
+    walk_value = int(walk) if walk is not None else (current["walk"] if current and current["manual"] else None)
+    manual = 1 if walk is not None else (current["manual"] if current else 0)
+    if preferred:
+        db.execute("UPDATE place_parking SET preferred = 0 WHERE place_id = ?", (place_id,))
+    db.execute("INSERT INTO place_parking (place_id, parking_id, walk, manual, preferred) VALUES (?, ?, ?, ?, ?) "
+               "ON CONFLICT(place_id, parking_id) DO UPDATE SET walk = excluded.walk, manual = excluded.manual, preferred = excluded.preferred",
+               (place_id, parking_id, walk_value, manual, int(bool(preferred)) if preferred is not None else (current["preferred"] if current else 0)))
+
+
+def remove_parking(db, place_id: str, parking_id: str) -> None:
+    db.execute("DELETE FROM place_parking WHERE place_id = ? AND parking_id = ?", (place_id, parking_id))
+
+
+def parking_list(db) -> dict[str, list[dict[str, Any]]]:
+    rows = db.execute("SELECT pp.*, p.name FROM place_parking pp JOIN places p ON p.id = pp.parking_id ORDER BY p.name")
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        out.setdefault(row["place_id"], []).append({"parking_id": row["parking_id"], "name": row["name"], "walk": row["walk"],
+                                                    "manual": bool(row["manual"]), "preferred": bool(row["preferred"])})
+    return out
 
 
 def set_travel(db, a: str, b: str, minutes: int | None) -> None:
@@ -291,6 +356,17 @@ def estimate(db, transport: Transport | None = None, pause: float = 1.1) -> dict
                        "ON CONFLICT(a, b) DO UPDATE SET minutes = excluded.minutes, mode = excluded.mode, updated_at = excluded.updated_at",
                        (*key, minutes, mode(db), _now()))
             estimated += 1
+    by_id = {p["id"]: p for p in located}
+    for row in db.execute("SELECT * FROM place_parking WHERE manual = 0").fetchall():  # walks from parking spots
+        place, spot = by_id.get(row["place_id"]), by_id.get(row["parking_id"])
+        if not place or not spot:
+            continue
+        route = get(OSRM.format(profile=MODES["walk"], a=f"{spot['lon']},{spot['lat']}", b=f"{place['lon']},{place['lat']}"))
+        routes = (route or {}).get("routes") or []
+        if routes:
+            db.execute("UPDATE place_parking SET walk = ? WHERE place_id = ? AND parking_id = ?",
+                       (max(1, int(-(-routes[0]["duration"] // 60))), row["place_id"], row["parking_id"]))
+            estimated += 1
     return {"estimated": estimated, "problems": problems}
 
 
@@ -298,6 +374,8 @@ def travel_list(db) -> list[dict[str, Any]]:
     """Every pair of places with its minutes (None = not known yet)."""
     places = list_places(db)
     table = {(r["a"], r["b"]): dict(r) for r in db.execute("SELECT * FROM travel_times")}
+    parked = {row[0] for row in db.execute("SELECT DISTINCT place_id FROM place_parking")}  # reached via their parking instead
+    places = [p for p in places if p["id"] not in parked]
     out = []
     for i, a in enumerate(places):
         for b in places[i + 1:]:

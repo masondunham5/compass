@@ -32,7 +32,7 @@ from typing import Any
 from assistant import availability, events, places, school, work
 
 SETTINGS = {
-    "day_start": 7 * 60,        # earliest block
+    "day_start": 7 * 60 + 30,   # earliest block (nothing is planned before 7:30 AM)
     "day_end": 22 * 60 + 30,    # latest block end
     "max_block": 90, "min_block": 30, "gap": 15,
     "daily_study_cap": 240,     # minutes of schoolwork per day
