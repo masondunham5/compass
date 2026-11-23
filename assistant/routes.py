@@ -310,7 +310,7 @@ def _span(event: dict[str, Any], day: date) -> tuple[int, int]:
 def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) -> dict[str, Any]:
     """Every item for each day, ready for a time grid: calendar feeds, personal Outlook, your own
     events, work shifts, accepted plan blocks, draft suggestions (today onward) and workouts."""
-    from assistant import planner
+    from assistant import places, planner
     try:
         first = date.fromisoformat(start) if start else date.today()
     except ValueError as error:
@@ -328,12 +328,22 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
         accepted = [dict(row) for row in db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (first.isoformat(), last.isoformat()))]
         placed_sessions = {b["ref"] for b in accepted + draft_blocks if b["kind"] == "workout"}
         sessions = _workouts(db, first, last)
+        kinds = {row[0]: row[1] for row in db.execute("SELECT id, kind FROM sessions WHERE session_date BETWEEN ? AND ?", (first.isoformat(), last.isoformat()))}
+        place_list, table = places.list_places(db), places.travel_table(db)
+        travel_warnings: list[str] = []
         out = []
         for offset in range(days):
             day = first + timedelta(days=offset)
             iso = day.isoformat()
             items = []
-            for event in availability.fixed_events(db, day):
+            fixed = availability.fixed_events(db, day)
+            travel = places.day_travel(db, day, fixed, place_list, table)
+            if day >= today:
+                travel_warnings += [w["message"] for w in travel["warnings"]]
+            for strip in travel["strips"]:
+                items.append({"id": f"travel:{iso}:{strip['start']}", "source": "travel", "kind": "travel", "title": f"Travel · {strip['minutes']} min",
+                              "all_day": False, "start": strip["start"], "end": strip["end"], "busy": True, "calendar": f"{strip['from']} → {strip['to']}"})
+            for event in fixed:
                 a, b = _span(event, day)
                 if not event["all_day"] and b <= a:
                     continue
@@ -343,9 +353,21 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                               "location": event.get("location") or "", "calendar": event.get("feed_name") or "",
                               "event_id": event.get("event_id"), "occurrence": event.get("occurrence"), "repeat": event.get("repeat"),
                               "notes": event.get("notes") or ""})
+                place = places.resolve(event.get("location", ""), place_list) if event.get("location") else None
+                if isinstance(place, dict):
+                    items[-1]["place"] = place["name"]
+                if event.get("location") and place != "virtual":
+                    items[-1]["directions"] = _directions(event["location"], place if isinstance(place, dict) else None)
+                if event["all_day"]:
+                    items[-1].update({"allday_key": event.get("allday_key"), "blocked_here": bool(event.get("blocked_here"))})
                 if source == "outlook":
                     items[-1].update({"outlook_id": event["id"], "movable": event.get("movable", False), "organizer": event.get("organizer", True),
                                       "series": event.get("series", False), "moving": event["id"] in moving})
+            for block in [b for b in accepted + draft_blocks if b["block_date"] == iso and b["kind"] == "workout" and b.get("outcome") != "missed"]:
+                pad = places.workout_padding(db, kinds.get(block["ref"], ""), place_list, table)
+                for a, b in ((block["start"] - pad, block["start"]), (block["end"], block["end"] + pad)) if pad else ():
+                    items.append({"id": f"travel:{iso}:{a}:gym", "source": "travel", "kind": "travel", "title": f"Travel · {pad} min",
+                                  "all_day": False, "start": max(0, a), "end": min(24 * 60, b), "busy": True, "calendar": "Gym trip"})
             for block in [b for b in accepted if b["block_date"] == iso]:
                 items.append({"id": block["id"], "source": "plan", "kind": block["kind"], "title": block["title"], "all_day": False,
                               "start": block["start"], "end": block["end"], "busy": block["outcome"] != "missed", "outcome": block["outcome"], "block": block})
@@ -359,7 +381,127 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                               "minutes": session["minutes"]})
             items.sort(key=lambda item: (not item["all_day"], item["start"], item["end"]))
             out.append({"date": iso, "items": items})
-        return {"start": first.isoformat(), "days": out, "warnings": (plan or {}).get("warnings", []), "draft_count": len(draft_blocks)}
+        return {"start": first.isoformat(), "days": out, "warnings": (plan or {}).get("warnings", []) + travel_warnings, "draft_count": len(draft_blocks)}
+
+
+def _directions(location: str, place: dict[str, Any] | None) -> str:
+    """What to search for in a maps app: the location, plus the place's city when it's just a building name."""
+    if place and place.get("address") and "," not in location and not any(ch.isdigit() for ch in location.split(" ")[0]):
+        area = place["address"].split(",", 1)[1].strip() if "," in place["address"] else place["address"]
+        return f"{location}, {area}"
+    return location
+
+
+# ---------------------------------------------------------------- places, travel and all-day events
+
+class PlaceRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=60)
+    kind: str | None = None
+    address: str | None = Field(default=None, max_length=200)
+    keywords: str | None = Field(default=None, max_length=500)
+    extra: int | None = Field(default=None, ge=0, le=60)
+
+
+class TravelRequest(BaseModel):
+    a: str
+    b: str
+    minutes: int | None = Field(default=None, ge=0, le=240)
+
+
+class PlaceSettings(BaseModel):
+    mode: str | None = Field(default=None, pattern="^(drive|walk|bike)$")
+    lift_place: str | None = None   # place id; "" = at home
+
+
+class AllDayRequest(BaseModel):
+    key: str = Field(min_length=3, max_length=400)
+    busy: bool | None = None         # None = back to the calendar's own setting
+
+
+def _places_payload(db) -> dict[str, Any]:
+    from assistant import places
+    return {"places": places.list_places(db), "travel": places.travel_list(db), "mode": places.mode(db),
+            "lift_place": places._setting(db, "lift_place") or "", "kinds": places.KINDS,
+            "unmatched": places.unmatched_locations(db, date.today())}
+
+
+@router.get("/places")
+def list_places() -> dict[str, Any]:
+    with connection() as db:
+        return _places_payload(db)
+
+
+@router.post("/places")
+def add_place(payload: PlaceRequest) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        try:
+            places.add_place(db, payload.model_dump())
+        except places.PlaceError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return _places_payload(db)
+
+
+@router.patch("/places/{place_id}")
+def edit_place(place_id: str, payload: PlaceRequest) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        try:
+            places.update_place(db, place_id, payload.model_dump())
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="That place doesn't exist any more.") from error
+        except places.PlaceError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return _places_payload(db)
+
+
+@router.delete("/places/{place_id}")
+def remove_place(place_id: str) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        places.delete_place(db, place_id)
+        return _places_payload(db)
+
+
+@router.post("/places/estimate")
+def estimate_travel() -> dict[str, Any]:
+    """Look up the places on OpenStreetMap and estimate travel times (only addresses are sent)."""
+    from assistant import places
+    with connection() as db:
+        try:
+            result = places.estimate(db)
+        except places.PlaceError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {**_places_payload(db), "result": result}
+
+
+@router.put("/places/travel")
+def set_travel(payload: TravelRequest) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        places.set_travel(db, payload.a, payload.b, payload.minutes)
+        return _places_payload(db)
+
+
+@router.put("/places/settings")
+def place_settings(payload: PlaceSettings) -> dict[str, Any]:
+    from assistant import places
+    with connection() as db:
+        if payload.mode:
+            places._set(db, "travel_mode", payload.mode)
+        if payload.lift_place is not None:
+            if payload.lift_place and not db.execute("SELECT 1 FROM places WHERE id = ?", (payload.lift_place,)).fetchone():
+                raise HTTPException(status_code=400, detail="Pick one of your places.")
+            places._set(db, "lift_place", payload.lift_place or None)
+        return _places_payload(db)
+
+
+@router.post("/allday")
+def block_all_day(payload: AllDayRequest) -> dict[str, Any]:
+    """Make an all-day event block the whole day (or not), even on read-only calendars."""
+    with connection() as db:
+        availability.set_day_override(db, payload.key, payload.busy)
+    return {"key": payload.key, "busy": payload.busy}
 
 
 # ---------------------------------------------------------------- your own events and to-dos

@@ -228,8 +228,12 @@ def initialize() -> None:
         ensure_plan_schema(db)
         from assistant.outlook import ensure_schema as ensure_outlook_schema
         from assistant.events import ensure_schema as ensure_events_schema
+        from assistant.availability import ensure_schema as ensure_overrides_schema
+        from assistant.places import ensure_schema as ensure_places_schema
         ensure_outlook_schema(db)
         ensure_events_schema(db)
+        ensure_overrides_schema(db)
+        ensure_places_schema(db)
         apply_exercise_aliases(db)
 
 

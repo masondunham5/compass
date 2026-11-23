@@ -33,7 +33,10 @@ def _busy_blocks(events: list[dict[str, Any]], day: date, lo: int = DAY_START, h
     blocks = []
     day_start = datetime.combine(day, datetime.min.time())
     for event in events:
-        if event["all_day"] or not event["busy"]:
+        if not event["busy"]:
+            continue
+        if event["all_day"]:  # a *busy* all-day event (Outlook "Show as: Busy", or "Block this day") keeps the day clear
+            blocks.append((lo, hi))
             continue
         start = max(datetime.fromisoformat(event["start"]), day_start)
         end = min(datetime.fromisoformat(event["end"]), day_start + timedelta(days=1))
@@ -82,8 +85,40 @@ def fixed_events(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
     items = events_between(db, day, day) + outlook.events_between(db, day, day) + events.occurrences(db, day, day)
     for shift in work.shifts_on(db, day):
         items.append({"title": shift["title"], "start": f"{day.isoformat()}T{shift['start']}", "end": f"{day.isoformat()}T{shift['end']}",
-                      "all_day": False, "busy": True, "location": "", "feed_name": "Work", "feed_kind": "work", "fixed": True})
+                      "all_day": False, "busy": True, "location": "", "place_hint": "work",
+                      "feed_name": "Work", "feed_kind": "work", "fixed": True})
+    overrides = day_overrides(db)
+    for item in items:
+        if item["all_day"]:
+            item["allday_key"] = allday_key(item, day)
+            if item["allday_key"] in overrides:
+                item["busy"] = overrides[item["allday_key"]]
+                item["blocked_here"] = True
     return items
+
+
+# ---------------------------------------------------------------- all-day events: label or "the whole day"
+
+def ensure_schema(db: sqlite3.Connection) -> None:
+    db.execute("CREATE TABLE IF NOT EXISTS day_overrides (key TEXT PRIMARY KEY, busy INTEGER NOT NULL, created_at TEXT NOT NULL)")
+
+
+def allday_key(event: dict[str, Any], day: date) -> str:
+    """Stable per-day key for an all-day event (also for read-only calendars, which Compass can't edit)."""
+    return f"{event.get('feed_kind') or 'feed'}|{event['title']}|{day.isoformat()}"
+
+
+def day_overrides(db: sqlite3.Connection) -> dict[str, bool]:
+    return {row[0]: bool(row[1]) for row in db.execute("SELECT key, busy FROM day_overrides")}
+
+
+def set_day_override(db: sqlite3.Connection, key: str, busy: bool | None) -> None:
+    """Block (or free) the whole day for one all-day event. None goes back to its calendar's setting."""
+    if busy is None:
+        db.execute("DELETE FROM day_overrides WHERE key = ?", (key,))
+    else:
+        db.execute("INSERT INTO day_overrides (key, busy, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET busy = excluded.busy",
+                   (key, int(busy), datetime.now().astimezone().isoformat(timespec="seconds")))
 
 
 def plan_items(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:

@@ -6,7 +6,8 @@ const HOUR_PX = 48;
 const cal = { mode: "day", day: null, data: null, start: null };
 try { cal.mode = localStorage.getItem("compass.calMode") || "day"; } catch { /* storage blocked */ }
 
-const SOURCE_LABEL = { feed: "Calendar", outlook: "Outlook", mine: "Your event", work: "Work", plan: "Plan", draft: "Suggestion", session: "Workout" };
+const SOURCE_LABEL = { feed: "Calendar", outlook: "Outlook", mine: "Your event", work: "Work", plan: "Plan", draft: "Suggestion", session: "Workout", travel: "Travel" };
+const directionsUrl = destination => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`;
 const BLOCK_LABEL = { study: "Study", review: "Exam review", workout: "Workout", task: "To-do", move: "Suggested move" };
 const REPEAT_LABEL = { none: "Doesn't repeat", daily: "Every day", weekdays: "Weekdays", weekly: "Every week", biweekly: "Every 2 weeks", monthly: "Every month" };
 
@@ -147,7 +148,7 @@ function chip(item) {
 
 function renderLegend() {
   const present = new Set(cal.data.days.flatMap(day => day.items.map(colorKey)));
-  const names = { feed: "School / calendars", outlook: "Outlook", mine: "Your events", work: "Work", study: "Study", review: "Exam review", workout: "Workouts", task: "To-dos" };
+  const names = { feed: "School / calendars", outlook: "Outlook", mine: "Your events", work: "Work", study: "Study", review: "Exam review", workout: "Workouts", task: "To-dos", travel: "Travel" };
   $("#cal-legend").innerHTML = Object.entries(names).filter(([key]) => present.has(key)).map(([key, label]) => `<span class="c-${key}"><i></i>${label}</span>`).join("")
     + (cal.data.days.some(day => day.items.some(item => item.source === "draft")) ? `<span class="draft-key"><i></i>Suggested</span>` : "");
 }
@@ -174,7 +175,8 @@ async function openItem(date, id) {
   const kindLabel = item.source === "plan" || item.source === "draft" ? BLOCK_LABEL[item.kind] || "Plan" : SOURCE_LABEL[item.source];
   const where = { feed: `From ${item.calendar || "your calendar"} (read-only). Change it there.`, outlook: "From your personal Outlook. Change it there; Compass plans around it.",
     work: "From your Work schedule (More → Work schedule).", plan: item.outcome === "missed" ? "Missed: taken off your Outlook Calendar, and the work goes back into the plan." : "Accepted into your plan and in your Outlook Calendar.",
-    draft: "A suggestion. Accept it to make it part of your schedule." }[item.source] || "";
+    draft: "A suggestion. Accept it to make it part of your schedule.",
+    travel: `${item.calendar}. Set places and travel times in More → Settings → Places & travel.` }[item.source] || "";
   let actions = "";
   if (item.source === "draft") actions = `<button class="btn btn-primary full" type="button" id="item-accept">Accept this block</button>`;
   const started = found.date < state.today.today || (found.date === state.today.today && item.start <= new Date().getHours() * 60 + new Date().getMinutes());
@@ -184,9 +186,19 @@ async function openItem(date, id) {
       : `<div class="sheet-actions"><button class="btn btn-ghost" type="button" data-outcome="missed">Missed it</button><button class="btn btn-primary" type="button" data-outcome="done">Done ✓</button></div>`;
     actions = `${checkin}<p class="note" id="item-result" hidden></p><div class="sheet-actions">${item.kind === "workout" ? `<button class="btn btn-ghost" type="button" id="item-open-workout">Open workout</button>` : ""}<button class="btn btn-danger" type="button" id="item-remove">Remove from plan</button></div>`;
   }
+  if (item.all_day && item.allday_key) {
+    actions += `<label class="toggle-row"><input id="item-block-day" type="checkbox" ${item.busy ? "checked" : ""}><span><b>Block this whole day</b>
+      <small>Keeps plans off this day. Leave it off for reminders and labels like “Pay rent”.${item.blocked_here ? " (Set in Compass.)" : ""}</small></span></label>`;
+  }
   sheet(`<p class="kicker">${esc(kindLabel)} · ${esc(fmtShort(found.date))}</p><h2>${esc(cleanTitle(item.title))}</h2>
-    <p class="muted">${esc(when)}${item.location ? ` · ${esc(item.location)}` : ""}${item.busy === false && item.source !== "draft" && item.source !== "plan" ? " · shown as free" : ""}</p>
+    <p class="muted">${esc(when)}${item.location ? ` · ${esc(item.location)}` : ""}${item.place ? ` (${esc(item.place)})` : ""}${item.busy === false && !item.all_day && item.source !== "draft" && item.source !== "plan" ? " · shown as free" : ""}</p>
+    ${item.directions ? `<p><a class="link-btn" href="${esc(directionsUrl(item.directions))}" target="_blank" rel="noopener">Directions ↗</a></p>` : ""}
     <p class="faint">${esc(where)}</p>${actions}`);
+  const blockDay = $("#item-block-day");
+  if (blockDay) blockDay.onchange = async () => {
+    try { await api("/api/assistant/allday", { method: "POST", body: JSON.stringify({ key: item.allday_key, busy: blockDay.checked }) }); closeSheet(); await refreshPlanViews(); }
+    catch (error) { alert(error.message); blockDay.checked = !blockDay.checked; }
+  };
   const accept = $("#item-accept");
   if (accept) accept.onclick = async () => { await acceptBlocks([item.block], accept); closeSheet(); };
   $$("#cal-sheet [data-outcome]").forEach(button => button.onclick = async () => {
@@ -267,7 +279,8 @@ function openOutlookForm(item, date) {
       <label>Date<input id="ol-date" type="date" required value="${esc(date)}"></label>
       ${item.all_day ? `<p class="faint">All-day event.</p>` : `<div class="form-grid"><label>Starts<input id="ol-start" type="time" step="300" value="${hhmm(item.start)}"></label><label>Ends<input id="ol-end" type="time" step="300" value="${hhmm(item.end)}"></label></div>`}
       <label>Location <span>optional</span><input id="ol-location" maxlength="120" value="${esc(item.location || "")}"></label>
-      <label class="toggle-row"><input id="ol-busy" type="checkbox" ${item.busy !== false ? "checked" : ""}><span><b>Busy</b><small>The planner keeps this time free.</small></span></label>
+      <label class="toggle-row"><input id="ol-busy" type="checkbox" ${item.busy !== false ? "checked" : ""}><span><b>${item.all_day ? "Block the whole day" : "Busy"}</b><small>Sets “Show as” in Outlook. ${item.all_day ? "Busy keeps plans off this day." : "The planner keeps this time free."}</small></span></label>
+      ${item.directions ? `<a class="link-btn" href="${esc(directionsUrl(item.directions))}" target="_blank" rel="noopener">Directions ↗</a>` : ""}
       ${notes.map(note => `<p class="faint">${esc(note)}</p>`).join("")}
       <p class="note error" id="ol-error" hidden></p>
       <div class="sheet-actions"><button class="btn btn-danger" type="button" id="ol-delete">Delete</button><button class="btn btn-primary" type="submit">Save to Outlook</button></div>
@@ -324,13 +337,17 @@ function openEventForm(event, occurrence, isNew = false) {
         <label id="ev-until-label" ${event.repeat === "none" ? "hidden" : ""}>Until <span>optional</span><input id="ev-until" type="date" value="${esc(event.repeat_until || "")}"></label></div>
       <label>Location <span>optional</span><input id="ev-location" maxlength="120" value="${esc(event.location || "")}"></label>
       <label>Notes <span>optional</span><textarea id="ev-notes" rows="2" maxlength="1000">${esc(event.notes || "")}</textarea></label>
-      <label class="toggle-row"><input id="ev-busy" type="checkbox" ${event.busy !== false ? "checked" : ""}><span><b>Busy</b><small>The planner keeps this time free. Turn off for reminders and things you can work around.</small></span></label>
+      <label class="toggle-row"><input id="ev-busy" type="checkbox" ${event.busy !== false && !(isNew && event.all_day) ? "checked" : ""}><span><b id="ev-busy-label">${event.all_day ? "Block the whole day" : "Busy"}</b><small>The planner keeps this time free. Turn off for reminders and things you can work around.</small></span></label>
       ${repeating ? `<label>Apply changes to<select id="ev-scope"><option value="one">Only this one (${esc(fmtShort(date))})</option><option value="future">This and following</option><option value="all">Every event</option></select></label>` : ""}
       <p class="note error" id="ev-error" hidden></p>
       <div class="sheet-actions">${isNew ? "" : `<button class="btn btn-danger" type="button" id="ev-delete">Delete</button>`}<button class="btn btn-primary" type="submit">${isNew ? "Add event" : "Save"}</button></div>
       <p class="faint">Goes into your Outlook Calendar when it's connected.</p>
     </form>`);
-  $("#ev-allday").onchange = event => { $("#ev-times").hidden = event.target.checked; };
+  $("#ev-allday").onchange = event => {
+    $("#ev-times").hidden = event.target.checked;
+    $("#ev-busy-label").textContent = event.target.checked ? "Block the whole day" : "Busy";
+    if (isNew) $("#ev-busy").checked = !event.target.checked;  // a new all-day event starts as a label
+  };
   $("#ev-repeat").onchange = event => { $("#ev-until-label").hidden = event.target.value === "none"; };
   const toTodo = $("#switch-todo");
   if (toTodo) toTodo.onclick = () => openTodoForm({ title: $("#ev-title").value, due_date: null });

@@ -733,3 +733,16 @@ input[type="range"] { accent-color: var(--accent); }
 @media (min-width: 1100px) {
   .chat-fab { bottom: 24px; right: 28px; }
 }
+
+/* travel strips */
+.c-travel { --c: #8b93a7; }
+.cal-item.c-travel { background: repeating-linear-gradient(135deg, rgba(139,147,167,.22) 0 6px, rgba(139,147,167,.08) 6px 12px); border-left-color: var(--c); color: var(--muted); }
+.cal-item.c-travel b { font-weight: 600; font-size: .72rem; }
+
+/* places & travel settings */
+.place-form { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.travel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.travel-grid label span { display: block; }
+.unmatched { margin-top: 12px; }
+.unmatched summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.unmatched select { width: auto; max-width: 140px; }

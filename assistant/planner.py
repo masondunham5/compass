@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from assistant import availability, events, school, work
+from assistant import availability, events, places, school, work
 
 SETTINGS = {
     "day_start": 7 * 60,        # earliest block
@@ -103,12 +103,14 @@ def _accepted(db: sqlite3.Connection, start: date, end: date) -> list[dict[str, 
 
 def _build_days(db: sqlite3.Connection, start: date, days: int, now: datetime, accepted: list[dict[str, Any]]) -> dict[str, Day]:
     out = {}
+    place_list, table = places.list_places(db), places.travel_table(db)
     for offset in range(days):
         day = start + timedelta(days=offset)
         # Fixed: school/ICS feeds, personal Outlook, your own events, work shifts — then accepted blocks.
         fixed = availability.fixed_events(db, day)
         held = [event for event in fixed if event.get("movable")]
         busy = list(availability._busy_blocks([e for e in fixed if not e.get("movable")], day, 0, 24 * 60))
+        busy += [(s["start"], s["end"]) for s in places.day_travel(db, day, fixed, place_list, table)["strips"]]  # getting there
         busy += [(b["start"], b["end"]) for b in accepted if b["block_date"] == day.isoformat()]
         open_from = SETTINGS["day_start"]
         if day == now.date():
@@ -242,12 +244,17 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
             continue
         day = plan_days.get(session["session_date"])
         title = session["title"].split(" · ", 1)[-1] if session["title"].startswith("W") else session["title"]
-        slot = _place(day, session["minutes"], prefer=WORKOUT_WINDOW) if day else None
+        pad = places.workout_padding(db, session["kind"])  # travel to and from the gym, if it isn't at home
+        slot = _place(day, session["minutes"] + 2 * pad, prefer=(WORKOUT_WINDOW[0] - pad, WORKOUT_WINDOW[1] - pad)) if day else None
         if slot is None:
             if day and day.date >= now.date():
-                warnings.append(f"No free {session['minutes']}-minute slot for {title} on {day.date.strftime('%a %b %d')} — consider moving it or the short version.")
+                warnings.append(f"No free {session['minutes'] + 2 * pad}-minute slot for {title} on {day.date.strftime('%a %b %d')}"
+                                f"{' (including travel to the gym)' if pad else ''} — consider moving it or the short version.")
             continue
-        add(day, slot, session["minutes"], "workout", session["id"], title)
+        if pad:
+            day.take(slot, pad)
+            day.take(slot + pad + session["minutes"], pad)
+        add(day, slot + pad, session["minutes"], "workout", session["id"], title)
 
     # Already-accepted study time counts toward each task.
     done_minutes: dict[str, int] = {}
