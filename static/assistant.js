@@ -6,6 +6,7 @@ const timeOf = iso => new Date(iso).toLocaleTimeString(undefined, { hour: "numer
 async function renderAssistant() {
   const [agenda, alerts, feeds, todayPlan] = await Promise.all([api("/api/assistant/agenda"), api("/api/assistant/alerts"), api("/api/assistant/calendars"), api("/api/assistant/plan?days=1").catch(() => null)]);
   renderAgenda(agenda, alerts.alerts, todayPlan);
+  if (window.renderCheckin) window.renderCheckin("#checkin-today");
   renderCalendarSettings(feeds.calendars);
   renderOutlook(await api("/api/assistant/outlook").catch(() => null));
 }

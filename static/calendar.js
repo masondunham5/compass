@@ -33,6 +33,7 @@ async function renderCalendar(start) {
   const data = await api(`/api/assistant/calendar?start=${start}&days=7`);
   cal.data = data;
   renderPlanStrip(data);
+  renderCheckin("#checkin-week");
   renderDayStrip();
   drawGrid();
   renderLegend();
@@ -121,9 +122,9 @@ function drawGrid() {
       const left = cascade ? Math.min(item._lane, 3) * 18 : item._lane * (100 / item._lanes);
       const width = cascade ? 100 - left : 100 / item._lanes;
       const short = height < 34;
-      return `<button type="button" class="cal-item c-${esc(colorKey(item))}${item.source === "draft" ? " draft" : ""}${item.busy === false && item.source !== "draft" ? " free" : ""}${item.moving ? " moving" : ""}${short ? " short" : ""}"
+      return `<button type="button" class="cal-item c-${esc(colorKey(item))}${item.source === "draft" ? " draft" : ""}${item.busy === false && item.source !== "draft" ? " free" : ""}${item.moving || item.outcome === "missed" ? " moving" : ""}${item.outcome === "done" ? " done" : ""}${short ? " short" : ""}"
         style="top:${top}px;height:${height}px;left:calc(${left}% + 1px);width:calc(${width}% - 2px);z-index:${item._lane + 1}" data-item="${esc(item.id)}" data-date="${day.date}">
-        <b>${item.kind === "move" ? "Move: " : ""}${esc(cleanTitle(item.title))}</b>${short || isWeek ? "" : `<small>${clockLabel(item.start)} – ${clockLabel(item.end)}${item.location ? ` · ${esc(item.location)}` : ""}</small>`}</button>`;
+        <b>${item.kind === "move" ? "Move: " : ""}${item.outcome === "done" ? "✓ " : ""}${esc(cleanTitle(item.title))}</b>${short || isWeek ? "" : `<small>${clockLabel(item.start)} – ${clockLabel(item.end)}${item.location ? ` · ${esc(item.location)}` : ""}</small>`}</button>`;
     }).join("");
     const nowLine = day.date === today && nowMin >= firstHour * 60 && nowMin <= lastHour * 60 ? `<i class="cal-now" style="top:${(nowMin - firstHour * 60) * HOUR_PX / 60}px"></i>` : "";
     return `<div class="cal-col${day.date === today ? " is-today" : ""}" data-col="${day.date}">${blocks}${nowLine}</div>`;
@@ -172,21 +173,73 @@ async function openItem(date, id) {
   const when = item.all_day ? "All day" : `${clockLabel(item.start)} – ${clockLabel(item.end)}`;
   const kindLabel = item.source === "plan" || item.source === "draft" ? BLOCK_LABEL[item.kind] || "Plan" : SOURCE_LABEL[item.source];
   const where = { feed: `From ${item.calendar || "your calendar"} (read-only). Change it there.`, outlook: "From your personal Outlook. Change it there; Compass plans around it.",
-    work: "From your Work schedule (More → Work schedule).", plan: "Accepted into your plan and in your Outlook Calendar.",
+    work: "From your Work schedule (More → Work schedule).", plan: item.outcome === "missed" ? "Missed: taken off your Outlook Calendar, and the work goes back into the plan." : "Accepted into your plan and in your Outlook Calendar.",
     draft: "A suggestion. Accept it to make it part of your schedule." }[item.source] || "";
   let actions = "";
   if (item.source === "draft") actions = `<button class="btn btn-primary full" type="button" id="item-accept">Accept this block</button>`;
-  if (item.source === "plan") actions = `<div class="sheet-actions">${item.kind === "workout" ? `<button class="btn btn-ghost" type="button" id="item-open-workout">Open workout</button>` : ""}<button class="btn btn-danger" type="button" id="item-remove">Remove from plan</button></div>`;
+  const started = found.date < state.today.today || (found.date === state.today.today && item.start <= new Date().getHours() * 60 + new Date().getMinutes());
+  if (item.source === "plan") {
+    const checkin = !started ? "" : item.outcome
+      ? `<p class="muted">Marked <b>${item.outcome === "done" ? "done ✓" : "missed"}</b>. <button class="link-btn" type="button" id="item-undo">Undo</button></p>`
+      : `<div class="sheet-actions"><button class="btn btn-ghost" type="button" data-outcome="missed">Missed it</button><button class="btn btn-primary" type="button" data-outcome="done">Done ✓</button></div>`;
+    actions = `${checkin}<p class="note" id="item-result" hidden></p><div class="sheet-actions">${item.kind === "workout" ? `<button class="btn btn-ghost" type="button" id="item-open-workout">Open workout</button>` : ""}<button class="btn btn-danger" type="button" id="item-remove">Remove from plan</button></div>`;
+  }
   sheet(`<p class="kicker">${esc(kindLabel)} · ${esc(fmtShort(found.date))}</p><h2>${esc(cleanTitle(item.title))}</h2>
-    <p class="muted">${esc(when)}${item.location ? ` · ${esc(item.location)}` : ""}${item.busy === false && item.source !== "draft" ? " · shown as free" : ""}</p>
+    <p class="muted">${esc(when)}${item.location ? ` · ${esc(item.location)}` : ""}${item.busy === false && item.source !== "draft" && item.source !== "plan" ? " · shown as free" : ""}</p>
     <p class="faint">${esc(where)}</p>${actions}`);
   const accept = $("#item-accept");
   if (accept) accept.onclick = async () => { await acceptBlocks([item.block], accept); closeSheet(); };
+  $$("#cal-sheet [data-outcome]").forEach(button => button.onclick = async () => {
+    const result = await markBlock(item.id, button.dataset.outcome);
+    if (result?.message) { $("#item-result").textContent = result.message; $("#item-result").hidden = false; $$("#cal-sheet [data-outcome]").forEach(b => b.remove()); }
+    else closeSheet();
+  });
+  const undo = $("#item-undo");
+  if (undo) undo.onclick = async () => { await markBlock(item.id, ""); closeSheet(); };
   const remove = $("#item-remove");
   if (remove) remove.onclick = async () => { await api("/api/assistant/plan/unaccept", { method: "POST", body: JSON.stringify({ block_id: item.id }) }); closeSheet(); await refreshPlanViews(); };
   const workout = $("#item-open-workout");
   if (workout) workout.onclick = async () => { closeSheet(); openSessionSheet(await api(`/api/sessions/${encodeURIComponent(item.block.ref)}`)); };
 }
+
+/* ---------------------------------------------------------------- check-in: done / missed */
+
+async function markBlock(blockId, outcome) {
+  try {
+    const result = await api(`/api/assistant/plan/blocks/${encodeURIComponent(blockId)}/outcome`, { method: "POST", body: JSON.stringify({ outcome }) });
+    await refreshPlanViews();
+    return result;
+  } catch (error) { alert(error.message); return null; }
+}
+
+/* "How did these go?" — blocks that ended in the last few days and haven't been marked.
+   The last result ("Rescheduled to Tue 3 PM") stays on the card for a little while. */
+const checkinNote = { text: "", timer: null };
+
+async function renderCheckin(selector) {
+  const box = $(selector);
+  if (!box) return;
+  let blocks = [];
+  try { blocks = (await api("/api/assistant/plan/checkin")).blocks; } catch { /* leave it empty */ }
+  if (!blocks.length && !checkinNote.text) { box.innerHTML = ""; return; }
+  const today = state.today.today;
+  const note = checkinNote.text ? `<p class="note">${esc(checkinNote.text)}</p>` : "";
+  box.innerHTML = `<article class="card checkin-card">${blocks.length ? `<div class="agenda-head"><h3>How did these go?</h3><span>${blocks.length} to check in</span></div>
+    <ul class="checkin-list">${blocks.map(block => `<li data-block="${esc(block.id)}">
+      <div><b>${esc(cleanTitle(block.title))}</b><small>${block.block_date === today ? "Today" : esc(fmtShort(block.block_date))} · ${esc(block.start_label)}–${esc(block.end_label)}</small></div>
+      <button type="button" class="btn btn-ghost small" data-mark="missed">Missed</button><button type="button" class="btn btn-primary small" data-mark="done">Done</button></li>`).join("")}</ul>
+    <p class="faint">Missed work is rescheduled automatically. Anything you don't mark counts as done.</p>` : ""}${note}</article>`;
+  box.querySelectorAll("[data-mark]").forEach(button => button.onclick = async () => {
+    button.closest("li").querySelectorAll("button").forEach(b => { b.disabled = true; });
+    const result = await markBlock(button.closest("li").dataset.block, button.dataset.mark);
+    if (!result) return;
+    clearTimeout(checkinNote.timer);
+    checkinNote.text = result.message || "";
+    checkinNote.timer = setTimeout(() => { checkinNote.text = ""; renderCheckin("#checkin-today"); renderCheckin("#checkin-week"); }, 20000);
+    await renderCheckin(selector);
+  });
+}
+window.renderCheckin = renderCheckin;
 
 /* A suggestion to move one of your personal Outlook events so schoolwork or a to-do fits. */
 function openMoveSheet(item, date) {

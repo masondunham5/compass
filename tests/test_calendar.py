@@ -241,3 +241,78 @@ def test_planner_suggests_moving_a_personal_event_to_meet_a_deadline(db, monkeyp
         assert client.patch("/api/assistant/outlook/events/errand", json={"title": "Errand!"}).json()["event"]["title"] == "Errand!"
         assert client.patch("/api/assistant/outlook/events/missing", json={"title": "x"}).status_code == 400
         assert client.delete("/api/assistant/outlook/events/errand").json() == {"deleted": True}
+
+
+# ---------------------------------------------------------------- check-in: done / missed
+
+NOON = datetime.combine(TODAY, datetime.min.time()).replace(hour=12)
+
+
+def accept_task_block(db, todo_id, title, start, end, day=TODAY):
+    block = {"id": f"task:{todo_id}:{day.isoformat()}:{start}", "block_date": day.isoformat(), "start": start, "end": end,
+             "kind": "task", "ref": todo_id, "title": title, "course": ""}
+    planner.accept(db, [block])
+    return block["id"]
+
+
+def test_missed_block_is_rescheduled_automatically(db):
+    todo = events.add_todo(db, {"title": "Call insurance", "minutes": 60})
+    block_id = accept_task_block(db, todo["id"], "Call insurance", at(9), at(10))
+    assert [b["id"] for b in planner.checkin(db, now=NOON)] == [block_id]
+    result = planner.mark(db, block_id, "missed", now=NOON)
+    assert result["outcome"] == "missed" and len(result["rescheduled"]) == 1 and result["message"].startswith("Rescheduled to")
+    new = result["rescheduled"][0]
+    assert new["block_date"] == TODAY.isoformat() and new["start"] >= at(12) and new["end"] - new["start"] == 60
+    rows = {row["id"]: row["outcome"] for row in db.execute("SELECT id, outcome FROM plan_blocks")}
+    assert rows == {block_id: "missed", new["id"]: ""}
+    assert planner.checkin(db, now=NOON) == []  # marked; the new block hasn't ended yet
+    # The new block covers the to-do, so the next draft adds nothing for it.
+    drafts = [b for d in planner.build(db, TODAY, 7, now=NOON)["days"] for b in d["blocks"] if b["status"] == "draft" and b["ref"] == todo["id"]]
+    assert drafts == []
+
+
+def test_done_block_counts_and_future_blocks_cant_be_checked_in(db):
+    todo = events.add_todo(db, {"title": "Taxes", "minutes": 60})
+    block_id = accept_task_block(db, todo["id"], "Taxes", at(9), at(10))
+    assert planner.mark(db, block_id, "done", now=NOON)["rescheduled"] == []
+    assert not [b for d in planner.build(db, TODAY, 7, now=NOON)["days"] for b in d["blocks"] if b["status"] == "draft" and b["ref"] == todo["id"]]
+    later = accept_task_block(db, todo["id"], "Taxes", at(15), at(16))
+    with pytest.raises(ValueError):
+        planner.mark(db, later, "missed", now=NOON)
+    with pytest.raises(KeyError):
+        planner.mark(db, "nope", "done", now=NOON)
+    assert planner.mark(db, block_id, "", now=NOON)["outcome"] == ""  # undo
+
+
+def test_missed_with_no_time_left_explains_why(db):
+    due = TODAY.isoformat()
+    todo = events.add_todo(db, {"title": "Mail form", "minutes": 60, "due_date": due, "due_time": "12:20"})  # only 20 min left
+    block_id = accept_task_block(db, todo["id"], "Mail form", at(9), at(10))
+    result = planner.mark(db, block_id, "missed", now=NOON)
+    assert result["rescheduled"] == [] and "Mail form" in result["message"]
+
+
+def test_outlook_shows_done_and_drops_missed(db):
+    graph = FakeGraph()
+    done = accept_task_block(db, "t1", "Groceries", at(9), at(10))
+    missed = accept_task_block(db, "t2", "Laundry", at(10, 30), at(11))
+    outlook.sync(db, transport=graph)
+    db.execute("UPDATE plan_blocks SET outcome = 'done' WHERE id = ?", (done,))
+    db.execute("UPDATE plan_blocks SET outcome = 'missed' WHERE id = ?", (missed,))
+    assert outlook.sync(db, transport=graph)["deleted"] == 1
+    assert [e["subject"] for e in graph.events.values()] == ["✓ To-do: Groceries"]
+
+
+def test_checkin_api(db):
+    todo = events.add_todo(db, {"title": "Return package", "minutes": 30})
+    past = accept_task_block(db, todo["id"], "Return package", 0, 30)  # midnight: always in the past
+    future = accept_task_block(db, todo["id"], "Return package", 23 * 60, 23 * 60 + 30)
+    db.commit()
+    with TestClient(app.app) as client:
+        assert past in [b["id"] for b in client.get("/api/assistant/plan/checkin").json()["blocks"]]
+        assert client.post(f"/api/assistant/plan/blocks/{future}/outcome", json={"outcome": "missed"}).status_code == 400
+        assert client.post(f"/api/assistant/plan/blocks/{past}/outcome", json={"outcome": "maybe"}).status_code == 422
+        result = client.post(f"/api/assistant/plan/blocks/{past}/outcome", json={"outcome": "done"}).json()
+        assert result["outcome"] == "done" and past not in [b["id"] for b in result["checkin"]]
+        grid = client.get(f"/api/assistant/calendar?start={TODAY.isoformat()}&days=1").json()
+        assert next(i for i in grid["days"][0]["items"] if i["id"] == past)["outcome"] == "done"

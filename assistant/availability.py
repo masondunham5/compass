@@ -89,7 +89,7 @@ def fixed_events(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
 def plan_items(db: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
     """Accepted plan blocks for one day, shaped like calendar events so they count as busy."""
     items = []
-    for block in db.execute("SELECT * FROM plan_blocks WHERE block_date = ? ORDER BY start", (day.isoformat(),)):
+    for block in db.execute("SELECT * FROM plan_blocks WHERE block_date = ? AND outcome != 'missed' ORDER BY start", (day.isoformat(),)):
         start, end = divmod(block["start"], 60), divmod(block["end"], 60)
         items.append({"title": block["title"], "start": f"{day.isoformat()}T{start[0]:02d}:{start[1]:02d}", "end": f"{day.isoformat()}T{end[0]:02d}:{end[1]:02d}",
                       "all_day": False, "busy": True, "location": "", "feed_name": "Plan", "feed_kind": f"plan-{block['kind']}", "fixed": False})

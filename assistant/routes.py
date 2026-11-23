@@ -127,7 +127,7 @@ def school_tasks(include_done: bool = False) -> dict[str, Any]:
     with connection() as db:
         forced = planner.forced_overdue(db)
         planned = {}
-        for row in db.execute("SELECT ref, SUM(end - start) AS minutes FROM plan_blocks WHERE kind IN ('study', 'review') GROUP BY ref"):
+        for row in db.execute("SELECT ref, SUM(end - start) AS minutes FROM plan_blocks WHERE kind IN ('study', 'review') AND outcome != 'missed' GROUP BY ref"):
             planned[row["ref"]] = row["minutes"]
     tasks = []
     for task in school.load_tasks():
@@ -259,6 +259,33 @@ def accept_plan(payload: AcceptRequest) -> dict[str, Any]:
     return {"accepted": saved + len(moves), "moved": len(moves)}
 
 
+class OutcomeRequest(BaseModel):
+    outcome: str = Field(pattern="^(done|missed|)$")
+
+
+@router.post("/plan/blocks/{block_id:path}/outcome")
+def mark_block(block_id: str, payload: OutcomeRequest) -> dict[str, Any]:
+    """Mark an accepted block done or missed (or clear it). Missed work is rescheduled right away."""
+    from assistant import outlook, planner
+    with connection() as db:
+        try:
+            result = planner.mark(db, block_id, payload.outcome)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="That block isn't in your plan any more.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        result["checkin"] = planner.checkin(db)
+    outlook.sync_soon()
+    return result
+
+
+@router.get("/plan/checkin")
+def plan_checkin() -> dict[str, Any]:
+    from assistant import planner
+    with connection() as db:
+        return {"blocks": planner.checkin(db)}
+
+
 @router.post("/plan/unaccept")
 def unaccept_plan(payload: UnacceptRequest) -> dict[str, Any]:
     from assistant import outlook, planner
@@ -321,7 +348,7 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                                       "series": event.get("series", False), "moving": event["id"] in moving})
             for block in [b for b in accepted if b["block_date"] == iso]:
                 items.append({"id": block["id"], "source": "plan", "kind": block["kind"], "title": block["title"], "all_day": False,
-                              "start": block["start"], "end": block["end"], "busy": True, "block": block})
+                              "start": block["start"], "end": block["end"], "busy": block["outcome"] != "missed", "outcome": block["outcome"], "block": block})
             for block in [b for b in draft_blocks if b["block_date"] == iso]:
                 clean = {k: v for k, v in block.items() if k not in ("status", "start_label", "end_label")}
                 items.append({"id": block["id"], "source": "draft", "kind": block["kind"], "title": block["title"], "all_day": False,

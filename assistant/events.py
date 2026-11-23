@@ -268,7 +268,7 @@ def delete_todo(db: sqlite3.Connection, todo_id: str) -> bool:
 
 
 def list_todos(db: sqlite3.Connection, include_done: bool = False) -> list[dict[str, Any]]:
-    planned = {row[0]: row[1] for row in db.execute("SELECT ref, SUM(end - start) FROM plan_blocks WHERE kind = 'task' GROUP BY ref")}
+    planned = {row[0]: row[1] for row in db.execute("SELECT ref, SUM(end - start) FROM plan_blocks WHERE kind = 'task' AND outcome != 'missed' GROUP BY ref")}
     rows = db.execute(
         f"SELECT * FROM todos {'' if include_done else 'WHERE done = 0'} ORDER BY done, due_date IS NULL, due_date, due_time, created_at"
     ).fetchall()

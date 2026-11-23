@@ -16,6 +16,10 @@ Flexible, placed in this order:
 
 The result is a draft: nothing is saved until you accept blocks. Accepted blocks are stored
 and treated as fixed the next time the draft is built.
+
+Check-in: once a block has started you can mark it done or missed (`mark`). A missed block keeps
+its time slot reserved but no longer counts toward its task, so the work is planned again; `mark`
+accepts the replacement right away (automatic rescheduling). Unmarked past blocks count as done.
 """
 
 from __future__ import annotations
@@ -52,6 +56,10 @@ def ensure_schema(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS plan_blocks_date ON plan_blocks (block_date);
         """
     )
+    columns = {row[1] for row in db.execute("PRAGMA table_info(plan_blocks)")}
+    if "outcome" not in columns:  # '' (not checked in), 'done' or 'missed'
+        db.execute("ALTER TABLE plan_blocks ADD COLUMN outcome TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE plan_blocks ADD COLUMN outcome_at TEXT")
 
 
 def clock(minutes: int) -> str:
@@ -182,8 +190,9 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
     start = start or now.date()
     horizon_end = start + timedelta(days=days - 1)
     cleanup(db)
-    accepted = _accepted(db, start, horizon_end)
-    plan_days = _build_days(db, start, days, now, accepted)
+    every_block = _accepted(db, start, horizon_end)
+    plan_days = _build_days(db, start, days, now, every_block)  # missed blocks keep their slot busy…
+    accepted = [b for b in every_block if b["outcome"] != "missed"]  # …but don't count as work done
     drafts: list[dict[str, Any]] = []
     warnings: list[str] = []
     accepted_refs = {(b["kind"], b["ref"]) for b in accepted}
@@ -245,7 +254,7 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
         if block["kind"] in ("study", "review", "task"):
             done_minutes[block["ref"]] = done_minutes.get(block["ref"], 0) + block["end"] - block["start"]
     # Accepted blocks outside the window still count toward their task.
-    for row in db.execute("SELECT ref, SUM(end - start) FROM plan_blocks WHERE kind IN ('study', 'review', 'task') AND (block_date < ? OR block_date > ?) GROUP BY ref",
+    for row in db.execute("SELECT ref, SUM(end - start) FROM plan_blocks WHERE kind IN ('study', 'review', 'task') AND outcome != 'missed' AND (block_date < ? OR block_date > ?) GROUP BY ref",
                           (start.isoformat(), horizon_end.isoformat())):
         done_minutes[row[0]] = done_minutes.get(row[0], 0) + row[1]
     for day in plan_days.values():
@@ -368,7 +377,7 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
         if remaining > 0 and due and due.date() <= horizon_end:
             warnings.append(f"Couldn't fit {remaining} min of “{todo['title']}” before it's due ({due.strftime('%a %b %d')}).")
 
-    blocks = [{**b, "status": "accepted"} for b in accepted] + [{**b, "status": "draft"} for b in drafts]
+    blocks = [{**b, "status": "accepted"} for b in every_block] + [{**b, "status": "draft"} for b in drafts]
     for block in blocks:
         block["start_label"], block["end_label"] = clock(block["start"]), clock(block["end"])
     blocks.sort(key=lambda b: (b["block_date"], b["start"]))
@@ -416,6 +425,63 @@ def accept(db: sqlite3.Connection, blocks: list[dict[str, Any]]) -> int:
             (block["id"], block["block_date"], start, end, block["kind"], block["ref"], str(block["title"])[:200], str(block.get("course", ""))[:60], stamp),
         ).rowcount
     return saved
+
+
+OUTCOMES = {"", "done", "missed"}
+
+
+def mark(db: sqlite3.Connection, block_id: str, outcome: str, now: datetime | None = None) -> dict[str, Any]:
+    """Record how an accepted block went. Marking it missed plans that work again right away
+    (accepting the new blocks) and reports where it went, or why it couldn't."""
+    now = now or datetime.now()
+    if outcome not in OUTCOMES:
+        raise ValueError("outcome must be done, missed or empty")
+    row = db.execute("SELECT * FROM plan_blocks WHERE id = ?", (block_id,)).fetchone()
+    if not row:
+        raise KeyError(block_id)
+    block = dict(row)
+    starts = datetime.combine(date.fromisoformat(block["block_date"]), datetime.min.time()) + timedelta(minutes=block["start"])
+    if outcome and starts > now:
+        raise ValueError("You can check in on a block once it has started. To skip a future block, remove it from the plan.")
+    db.execute("UPDATE plan_blocks SET outcome = ?, outcome_at = ? WHERE id = ?",
+               (outcome, now.astimezone().isoformat(timespec="seconds") if outcome else None, block_id))
+    result: dict[str, Any] = {"block_id": block_id, "outcome": outcome, "rescheduled": [], "message": ""}
+    if outcome != "missed":
+        return result
+    plan = build(db, now.date(), 7, now=now)
+    drafts = [b for day in plan["days"] for b in day["blocks"] if b["status"] == "draft" and b["kind"] == block["kind"] and b["ref"] == block["ref"]]
+    need, chosen = block["end"] - block["start"], []
+    for draft in sorted(drafts, key=lambda b: (b["block_date"], b["start"])):
+        if need <= 0:
+            break
+        chosen.append({k: v for k, v in draft.items() if k not in ("status", "start_label", "end_label")})
+        need -= draft["end"] - draft["start"]
+    accept(db, chosen)
+    result["rescheduled"] = chosen
+    if chosen:
+        when = ", ".join(f"{date.fromisoformat(b['block_date']).strftime('%a')} {clock(b['start'])}" for b in chosen)
+        result["message"] = f"Rescheduled to {when}."
+    elif block["kind"] == "workout":
+        result["message"] = "No time left today for it. Move or skip the workout in Train if you want to make it up."
+    else:
+        result["message"] = next((w for w in plan["warnings"] if block["title"] in w),
+                                 "Nothing new was scheduled: there's no free time before it's due, or the work is already covered.")
+    return result
+
+
+def checkin(db: sqlite3.Connection, now: datetime | None = None, days_back: int = 3) -> list[dict[str, Any]]:
+    """Accepted blocks that have ended in the last few days and haven't been marked done or missed."""
+    now = now or datetime.now()
+    first = (now.date() - timedelta(days=days_back)).isoformat()
+    rows = db.execute("SELECT * FROM plan_blocks WHERE outcome = '' AND block_date BETWEEN ? AND ? ORDER BY block_date, start",
+                      (first, now.date().isoformat())).fetchall()
+    minute = now.hour * 60 + now.minute
+    out = []
+    for row in rows:
+        if row["block_date"] == now.date().isoformat() and row["end"] > minute:
+            continue
+        out.append({**dict(row), "start_label": clock(row["start"]), "end_label": clock(row["end"])})
+    return out
 
 
 def unaccept(db: sqlite3.Connection, block_id: str | None = None, from_date: str | None = None) -> int:

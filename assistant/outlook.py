@@ -248,7 +248,7 @@ NOTE = "Planned in Compass. Change or remove it in Compass — edits made here a
 
 def event_for(block: dict[str, Any]) -> dict[str, Any]:
     return {
-        "subject": f"{KIND_LABEL.get(block['kind'], 'Plan')}: {block['title']}",
+        "subject": f"{'✓ ' if block.get('outcome') == 'done' else ''}{KIND_LABEL.get(block['kind'], 'Plan')}: {block['title']}",
         "start": {"dateTime": _utc(block["block_date"], block["start"]), "timeZone": "UTC"},
         "end": {"dateTime": _utc(block["block_date"], block["end"]), "timeZone": "UTC"},
         "body": {"contentType": "text", "content": NOTE},
@@ -291,7 +291,7 @@ def _move_to_main(db: sqlite3.Connection, graph: Graph) -> None:
 def _wanted(db: sqlite3.Connection, start: date, end: date) -> dict[str, dict[str, Any]]:
     """Every Outlook event Compass should have written in the window, keyed by link id."""
     from assistant import events  # local import: events doesn't depend on outlook
-    rows = db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat()))
+    rows = db.execute("SELECT * FROM plan_blocks WHERE block_date BETWEEN ? AND ? AND outcome != 'missed'", (start.isoformat(), end.isoformat()))
     wanted = {row["id"]: event_for(dict(row)) for row in rows}
     wanted.update({occ["id"]: event_for_mine(occ) for occ in events.occurrences(db, start, end)})
     return wanted
@@ -303,7 +303,7 @@ def _stale(db: sqlite3.Connection, link_id: str, wanted: dict[str, Any], start: 
         return False
     if link_id.startswith("mine:"):
         return link_id.rsplit(":", 1)[-1] >= start.isoformat()
-    return not db.execute("SELECT 1 FROM plan_blocks WHERE id = ?", (link_id,)).fetchone()
+    return not db.execute("SELECT 1 FROM plan_blocks WHERE id = ? AND outcome != 'missed'", (link_id,)).fetchone()  # missed: removed
 
 
 _sync_lock = threading.Lock()
