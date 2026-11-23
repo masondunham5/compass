@@ -364,7 +364,7 @@ def calendar_view(start: str | None = None, days: int = 7, drafts: bool = True) 
                     items[-1].update({"outlook_id": event["id"], "movable": event.get("movable", False), "organizer": event.get("organizer", True),
                                       "series": event.get("series", False), "moving": event["id"] in moving})
             for block in [b for b in accepted + draft_blocks if b["block_date"] == iso and b["kind"] == "workout" and b.get("outcome") != "missed"]:
-                pad = places.workout_padding(db, kinds.get(block["ref"], ""), place_list, table)
+                pad = places.workout_padding(db, kinds.get(block["ref"], ""), day, place_list, table)
                 for a, b in ((block["start"] - pad, block["start"]), (block["end"], block["end"] + pad)) if pad else ():
                     items.append({"id": f"travel:{iso}:{a}:gym", "source": "travel", "kind": "travel", "title": f"Travel · {pad} min",
                                   "all_day": False, "start": max(0, a), "end": min(24 * 60, b), "busy": True, "calendar": "Gym trip"})
@@ -400,6 +400,7 @@ class PlaceRequest(BaseModel):
     address: str | None = Field(default=None, max_length=200)
     keywords: str | None = Field(default=None, max_length=500)
     extra: int | None = Field(default=None, ge=0, le=60)
+    home_for: str | None = Field(default=None, pattern="^(always|school|break)$")
 
 
 class TravelRequest(BaseModel):
@@ -410,7 +411,8 @@ class TravelRequest(BaseModel):
 
 class PlaceSettings(BaseModel):
     mode: str | None = Field(default=None, pattern="^(drive|walk|bike)$")
-    lift_place: str | None = None   # place id; "" = at home
+    lift_place_school: str | None = None   # place id; "" = at home
+    lift_place_break: str | None = None
 
 
 class AllDayRequest(BaseModel):
@@ -421,7 +423,9 @@ class AllDayRequest(BaseModel):
 def _places_payload(db) -> dict[str, Any]:
     from assistant import places
     return {"places": places.list_places(db), "travel": places.travel_list(db), "mode": places.mode(db),
-            "lift_place": places._setting(db, "lift_place") or "", "kinds": places.KINDS,
+            "lift_place_school": places.lift_place(db, "school") or "", "lift_place_break": places.lift_place(db, "break") or "",
+            "kinds": places.KINDS, "home_for": places.HOME_FOR, "today_term": places.term_on(db, date.today()),
+            "has_terms": bool(db.execute("SELECT 1 FROM terms LIMIT 1").fetchone()),
             "unmatched": places.unmatched_locations(db, date.today())}
 
 
@@ -489,10 +493,13 @@ def place_settings(payload: PlaceSettings) -> dict[str, Any]:
     with connection() as db:
         if payload.mode:
             places._set(db, "travel_mode", payload.mode)
-        if payload.lift_place is not None:
-            if payload.lift_place and not db.execute("SELECT 1 FROM places WHERE id = ?", (payload.lift_place,)).fetchone():
+        for term in places.TERMS:
+            value = getattr(payload, f"lift_place_{term}")
+            if value is None:
+                continue
+            if value and not db.execute("SELECT 1 FROM places WHERE id = ?", (value,)).fetchone():
                 raise HTTPException(status_code=400, detail="Pick one of your places.")
-            places._set(db, "lift_place", payload.lift_place or None)
+            places._set(db, f"lift_place_{term}", value or None)
         return _places_payload(db)
 
 

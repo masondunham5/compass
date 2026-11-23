@@ -1,4 +1,4 @@
-const CACHE = "compass-v11";
+const CACHE = "compass-v12";
 
 self.addEventListener("install", event => {
   event.waitUntil(

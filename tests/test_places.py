@@ -72,7 +72,7 @@ def test_locations_match_places_by_keyword(db, campus):
     assert places.resolve("", plist) is None
     assert places.resolve("100 Main St", plist)["name"] == "Home"  # the street part of the address counts too
     with pytest.raises(places.PlaceError):
-        places.add_place(db, {"name": "Second home", "kind": "home"})
+        places.add_place(db, {"name": "Second home", "kind": "home"})  # Home is already all year
 
 
 def test_travel_minutes_include_arrival_extra(db, campus):
@@ -121,7 +121,7 @@ def test_planner_keeps_travel_time_free_and_pads_gym_workouts(db, campus):
     feed_event(db, "CSE 231", TOMORROW, at(10), at(10, 50), "Bessey Hall 108")
     gym = places.add_place(db, {"name": "IM East", "kind": "gym", "address": "IM East, East Lansing", "keywords": "IM East"})
     places.set_travel(db, campus["home"]["id"], gym["id"], 10)
-    places._set(db, "lift_place", gym["id"])
+    places._set(db, "lift_place_school", gym["id"])  # no terms set: every day is a school day
     db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, locked, source) VALUES ('lift', ?, 'strength', 'Chest', 60, 'planned', 0, 'x')",
                (TOMORROW.isoformat(),))
     events.add_todo(db, {"title": "Email advisor", "minutes": 30, "due_date": TOMORROW.isoformat(), "due_time": "18:00"})
@@ -172,7 +172,44 @@ def test_places_api(db):
         assert client.post("/api/assistant/places", json={"name": "", "kind": "home"}).status_code == 400
         data = client.put("/api/assistant/places/travel", json={"a": campus_id, "b": home_id, "minutes": 18}).json()
         assert data["travel"][0]["minutes"] == 18 and data["travel"][0]["manual"]
-        assert client.put("/api/assistant/places/settings", json={"mode": "walk", "lift_place": campus_id}).json()["mode"] == "walk"
-        assert client.put("/api/assistant/places/settings", json={"lift_place": "nope"}).status_code == 400
+        data = client.put("/api/assistant/places/settings", json={"mode": "walk", "lift_place_school": campus_id}).json()
+        assert data["mode"] == "walk" and data["lift_place_school"] == campus_id and data["lift_place_break"] == ""
+        assert client.put("/api/assistant/places/settings", json={"lift_place_break": "nope"}).status_code == 400
         data = client.delete(f"/api/assistant/places/{campus_id}").json()
-        assert [p["name"] for p in data["places"]] == ["Home"] and data["lift_place"] == "" and data["travel"] == []
+        assert [p["name"] for p in data["places"]] == ["Home"] and data["lift_place_school"] == "" and data["travel"] == []
+
+
+# ---------------------------------------------------------------- home during school terms vs breaks
+
+def test_home_follows_school_terms_and_breaks(db):
+    apartment = places.add_place(db, {"name": "Apartment", "kind": "home", "home_for": "school", "address": "1 Campus Ave, East Lansing, MI"})
+    family = places.add_place(db, {"name": "Home", "kind": "home", "home_for": "break", "address": "9 Family Rd, Ann Arbor, MI"})
+    school = places.add_place(db, {"name": "Campus", "kind": "campus", "keywords": "Bessey"})
+    gym = places.add_place(db, {"name": "Planet Fitness", "kind": "gym", "keywords": "Planet Fitness"})
+    with pytest.raises(places.PlaceError):
+        places.add_place(db, {"name": "Cabin", "kind": "home", "home_for": "break"})
+    with pytest.raises(places.PlaceError):
+        places.update_place(db, family["id"], {"home_for": "always"})
+    places.set_travel(db, apartment["id"], school["id"], 10)
+    places.set_travel(db, family["id"], school["id"], 90)
+    places.set_travel(db, family["id"], gym["id"], 15)
+    places._set(db, "lift_place_break", gym["id"])        # campus gym is fine at school, Planet Fitness over break
+    term_end = TODAY + timedelta(days=2)
+    work.add_term(db, "Fall semester", "school", (TODAY - timedelta(days=90)).isoformat(), term_end.isoformat())
+    in_term, in_break = TOMORROW, TODAY + timedelta(days=5)  # after the term ends: a break
+    for day in (in_term, in_break):
+        feed_event(db, "Meeting", day, at(13), at(14), "Bessey Hall 108")
+    plist = places.list_places(db)
+    assert places.home_on(plist, "school")["name"] == "Apartment" and places.home_on(plist, "break")["name"] == "Home"
+    first = places.day_travel(db, in_term, availability.fixed_events(db, in_term))["strips"][0]
+    later = places.day_travel(db, in_break, availability.fixed_events(db, in_break))["strips"][0]
+    assert (first["from"], first["minutes"]) == ("Apartment", 10)
+    assert (later["from"], later["minutes"]) == ("Home", 90)
+    assert places.workout_padding(db, "strength", in_term) == 0 and places.workout_padding(db, "strength", in_break) == 15
+
+
+def test_old_single_lifting_place_carries_over(db):
+    gym = places.add_place(db, {"name": "IM East", "kind": "gym"})
+    places._set(db, "lift_place", gym["id"])
+    places.ensure_schema(db)
+    assert places.lift_place(db, "school") == gym["id"] == places.lift_place(db, "break") and places._setting(db, "lift_place") is None

@@ -20,14 +20,19 @@ function placesRender(data) {
   const box = $("#places-body");
   if (!box) return;
   const kinds = data.kinds;
-  const options = (selected, includeHome = false) => (includeHome ? `<option value="">At home / apartment gym</option>` : "")
+  const options = (selected, includeHome = false) => (includeHome ? `<option value="">At home (no travel)</option>` : "")
     + data.places.map(p => `<option value="${esc(p.id)}" ${p.id === selected ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   const editing = data.places.find(p => p.id === placesState.editing) || null;
   const list = data.places.length
-    ? data.places.map(p => `<div class="row-item"><div class="grow"><b>${esc(p.name)} <span class="muted">· ${esc(kinds[p.kind] || p.kind)}</span></b>
+    ? data.places.map(p => `<div class="row-item"><div class="grow"><b>${esc(p.name)} <span class="muted">· ${esc(kinds[p.kind] || p.kind)}${p.kind === "home" && p.home_for !== "always" ? ` ${esc(data.home_for[p.home_for].toLowerCase())}` : ""}</span></b>
         <small>${esc(p.address || "No address yet")}${p.keywords ? ` · matches: ${esc(p.keywords)}` : ""}${p.extra ? ` · +${p.extra} min to park/walk` : ""}</small></div>
         <div class="record-actions"><button type="button" data-place-edit="${esc(p.id)}">Edit</button><button type="button" data-place-remove="${esc(p.id)}">Remove</button></div></div>`).join("")
-    : `<p class="muted">Start with Home, then add Campus, Work and anywhere else you go.</p>`;
+    : `<p class="muted">Start with your home (your apartment during school terms, and your family home during breaks), then add Campus, Work and anywhere else you go.</p>`;
+  const homes = data.places.filter(p => p.kind === "home" && p.id !== placesState.editing).map(p => p.home_for);
+  const homeDefault = editing?.home_for || (homes.includes("school") ? "break" : homes.includes("break") ? "school" : "school");
+  const termNote = data.has_terms
+    ? `<p class="faint">Today counts as a ${data.today_term === "break" ? "break" : "school term"}. Days outside your school terms (More → Work schedule) count as breaks.</p>`
+    : `<p class="note">No school terms set yet, so every day counts as a school term. Add your semester dates in More → Work schedule; days outside them count as breaks, and your break home takes over.</p>`;
   const travel = data.travel.length
     ? `<div class="travel-grid">${data.travel.map(t => `<label>${esc(t.a_name)} ↔ ${esc(t.b_name)}<span>${t.manual ? "your number" : t.minutes == null ? "not known yet" : "estimated"}</span>
         <input type="number" min="0" max="240" step="5" inputmode="numeric" value="${t.minutes ?? ""}" placeholder="min" data-travel-a="${esc(t.a)}" data-travel-b="${esc(t.b)}"></label>`).join("")}</div>`
@@ -37,11 +42,13 @@ function placesRender(data) {
         ${data.unmatched.map(u => `<div class="row-item"><div class="grow"><b>${esc(u.location)}</b><small>${u.count} event${u.count === 1 ? "" : "s"} in the next month</small></div>
           <select data-unmatched="${esc(u.location)}"><option value="">Add to…</option>${options("")}</select></div>`).join("")}</details>`
     : "";
-  box.innerHTML = `<div class="stack">${list}</div>
+  box.innerHTML = `${termNote}<div class="stack">${list}</div>
     <form id="place-form" class="stack place-form">
       <p class="kicker">${editing ? `Edit ${esc(editing.name)}` : "Add a place"}</p>
       <div class="form-grid"><label>Name<input id="place-name" maxlength="60" required value="${esc(editing?.name || "")}" placeholder="Campus"></label>
         <label>Kind<select id="place-kind">${Object.entries(kinds).map(([k, label]) => `<option value="${k}" ${k === (editing?.kind || (data.places.length ? "campus" : "home")) ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+      <label id="place-home-for-label" ${(editing?.kind || (data.places.length ? "campus" : "home")) === "home" ? "" : "hidden"}>Home during
+        <select id="place-home-for">${Object.entries(data.home_for).map(([k, label]) => `<option value="${k}" ${k === homeDefault ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <label>Address<input id="place-address" maxlength="200" value="${esc(editing?.address || "")}" placeholder="Street, city, state"></label>
       <label>Matches locations containing <span>comma-separated, e.g. Bessey, BCC, Business College</span><input id="place-keywords" maxlength="500" value="${esc(editing?.keywords || "")}"></label>
       <label>Extra minutes on arrival <span>parking, walking to the building</span><input id="place-extra" type="number" min="0" max="60" step="5" value="${editing?.extra ?? 0}"></label>
@@ -50,7 +57,9 @@ function placesRender(data) {
     </form>
     ${data.places.length > 1 ? `<div class="stack"><p class="kicker">Travel times</p>
       <div class="form-grid"><label>Getting around<select id="travel-mode">${[["drive", "Driving"], ["walk", "Walking"], ["bike", "Biking"]].map(([v, l]) => `<option value="${v}" ${v === data.mode ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-        <label>Where you lift<select id="lift-place">${options(data.lift_place, true)}</select></label></div>
+      </div>
+      <div class="form-grid"><label>Lifting during school terms<select id="lift-place-school">${options(data.lift_place_school, true)}</select></label>
+        <label>Lifting during breaks<select id="lift-place-break">${options(data.lift_place_break, true)}</select></label></div>
       ${travel}
       <button class="btn btn-ghost" type="button" id="travel-estimate">Estimate from the map</button>
       <p class="faint">Estimates use OpenStreetMap; only your places' addresses are sent. Numbers you type are kept.</p>
@@ -60,7 +69,7 @@ function placesRender(data) {
   $("#place-form").onsubmit = async event => {
     event.preventDefault();
     const body = { name: $("#place-name").value.trim(), kind: $("#place-kind").value, address: $("#place-address").value.trim(),
-      keywords: $("#place-keywords").value.trim(), extra: Number($("#place-extra").value || 0) };
+      keywords: $("#place-keywords").value.trim(), extra: Number($("#place-extra").value || 0), home_for: $("#place-home-for").value };
     try {
       const url = editing ? `/api/assistant/places/${encodeURIComponent(editing.id)}` : "/api/assistant/places";
       placesState.editing = null;
@@ -80,8 +89,11 @@ function placesRender(data) {
   });
   const travelMode = $("#travel-mode");
   if (travelMode) travelMode.onchange = async () => placesRender(await api("/api/assistant/places/settings", { method: "PUT", body: JSON.stringify({ mode: travelMode.value }) }));
-  const lift = $("#lift-place");
-  if (lift) lift.onchange = async () => placesRender(await api("/api/assistant/places/settings", { method: "PUT", body: JSON.stringify({ lift_place: lift.value }) }));
+  $("#place-kind").onchange = event => { $("#place-home-for-label").hidden = event.target.value !== "home"; };
+  for (const term of ["school", "break"]) {
+    const lift = $(`#lift-place-${term}`);
+    if (lift) lift.onchange = async () => placesRender(await api("/api/assistant/places/settings", { method: "PUT", body: JSON.stringify({ [`lift_place_${term}`]: lift.value }) }));
+  }
   const estimate = $("#travel-estimate");
   if (estimate) estimate.onclick = async () => {
     estimate.disabled = true; estimate.textContent = "Estimating…";

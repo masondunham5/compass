@@ -244,7 +244,7 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
             continue
         day = plan_days.get(session["session_date"])
         title = session["title"].split(" · ", 1)[-1] if session["title"].startswith("W") else session["title"]
-        pad = places.workout_padding(db, session["kind"])  # travel to and from the gym, if it isn't at home
+        pad = places.workout_padding(db, session["kind"], day.date) if day else 0  # travel to and from the gym, if it isn't at home
         slot = _place(day, session["minutes"] + 2 * pad, prefer=(WORKOUT_WINDOW[0] - pad, WORKOUT_WINDOW[1] - pad)) if day else None
         if slot is None:
             if day and day.date >= now.date():

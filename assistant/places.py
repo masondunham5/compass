@@ -12,8 +12,12 @@
   returns travel strips (busy time for the planner, thin bars on the calendar) plus warnings when
   two events are too close together to make it. A "Drive to …" style event you made yourself
   counts as that travel, so nothing is doubled.
-- Workouts: if you lift somewhere other than Home (setting `lift_place`), strength workouts get
-  travel from and back to Home on each side (`workout_padding`).
+- Home depends on the time of year: a home place is home during school terms, during breaks, or
+  all year (`home_for`), using the terms in More → Work schedule (`work.term_kind`; with no terms
+  set, every day is a school day). So an apartment near campus and a family home over break can
+  both be set up once. `home_on(places, term)` picks the right one.
+- Workouts: if you lift somewhere other than home (`lift_place_school` / `lift_place_break`),
+  strength workouts get travel from and back to that day's home on each side (`workout_padding`).
 Only place addresses are sent to OpenStreetMap, and only when you press Estimate.
 """
 
@@ -31,6 +35,8 @@ from datetime import date, datetime
 from typing import Any, Callable
 
 KINDS = {"home": "Home", "campus": "Campus", "work": "Work", "gym": "Gym", "other": "Other"}
+HOME_FOR = {"always": "All year", "school": "During school terms", "break": "During breaks"}
+TERMS = ("school", "break")
 MODES = {"drive": "routed-car", "walk": "routed-foot", "bike": "routed-bike"}
 VIRTUAL = re.compile(r"\b(teams|zoom|virtual|online|webex|meet\.google|google meet|remote|skype|discord)\b", re.IGNORECASE)
 TRAVEL_TITLE = re.compile(r"^\s*(drive|driving|commute|bus|walk|bike|ride|travel|uber|lyft|head)\b", re.IGNORECASE)
@@ -49,13 +55,21 @@ def ensure_schema(db: sqlite3.Connection) -> None:
     db.executescript(
         """CREATE TABLE IF NOT EXISTS places (
                id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'other', address TEXT NOT NULL DEFAULT '',
-               keywords TEXT NOT NULL DEFAULT '', extra INTEGER NOT NULL DEFAULT 0, lat REAL, lon REAL, created_at TEXT NOT NULL
+               keywords TEXT NOT NULL DEFAULT '', extra INTEGER NOT NULL DEFAULT 0, lat REAL, lon REAL, created_at TEXT NOT NULL,
+               home_for TEXT NOT NULL DEFAULT 'always'
            );
            CREATE TABLE IF NOT EXISTS travel_times (
                a TEXT NOT NULL, b TEXT NOT NULL, minutes INTEGER NOT NULL, manual INTEGER NOT NULL DEFAULT 0, mode TEXT NOT NULL DEFAULT 'drive',
                updated_at TEXT NOT NULL, PRIMARY KEY (a, b)
            );"""
     )
+    if "home_for" not in {row[1] for row in db.execute("PRAGMA table_info(places)")}:
+        db.execute("ALTER TABLE places ADD COLUMN home_for TEXT NOT NULL DEFAULT 'always'")
+    old_lift = _setting(db, "lift_place")  # before per-term lifting places
+    if old_lift and _setting(db, "lift_place_school") is None:
+        _set(db, "lift_place_school", old_lift)
+        _set(db, "lift_place_break", old_lift)
+        _set(db, "lift_place", None)
 
 
 def _setting(db, key: str, default: str | None = None) -> str | None:
@@ -90,7 +104,23 @@ def _clean(fields: dict[str, Any]) -> dict[str, Any]:
         raise PlaceError("Extra minutes should be a number.") from error
     if not 0 <= extra <= 60:
         raise PlaceError("Extra minutes can be 0–60.")
-    return {"name": name, "kind": kind, "address": str(fields.get("address") or "").strip()[:200], "keywords": keywords, "extra": extra}
+    home_for = str(fields.get("home_for") or "always") if kind == "home" else "always"
+    if home_for not in HOME_FOR:
+        raise PlaceError("A home is for school terms, breaks, or all year.")
+    return {"name": name, "kind": kind, "address": str(fields.get("address") or "").strip()[:200], "keywords": keywords, "extra": extra,
+            "home_for": home_for}
+
+
+def _check_homes(db, values: dict[str, Any], place_id: str | None = None) -> None:
+    """At most one home for each part of the year: one all-year home, or a school-term and a break home."""
+    if values["kind"] != "home":
+        return
+    others = [row["home_for"] for row in db.execute("SELECT home_for FROM places WHERE kind = 'home' AND id != ?", (place_id or "",))]
+    mine = values["home_for"]
+    if "always" in others or (mine == "always" and others) or mine in others:
+        label = {"always": "all year", "school": "during school terms", "break": "during breaks"}
+        taken = ", ".join(label[o] for o in others)
+        raise PlaceError(f"You already have a home {taken}. Set one home for school terms and one for breaks, or a single all-year home.")
 
 
 def list_places(db) -> list[dict[str, Any]]:
@@ -99,10 +129,9 @@ def list_places(db) -> list[dict[str, Any]]:
 
 def add_place(db, fields: dict[str, Any]) -> dict[str, Any]:
     values = _clean(fields)
-    if values["kind"] == "home" and db.execute("SELECT 1 FROM places WHERE kind = 'home'").fetchone():
-        raise PlaceError("You already have a Home. Edit that one instead.")
+    _check_homes(db, values)
     place_id = uuid.uuid4().hex[:10]
-    db.execute("INSERT INTO places (id, name, kind, address, keywords, extra, created_at) VALUES (:id, :name, :kind, :address, :keywords, :extra, :now)",
+    db.execute("INSERT INTO places (id, name, kind, address, keywords, extra, home_for, created_at) VALUES (:id, :name, :kind, :address, :keywords, :extra, :home_for, :now)",
                {**values, "id": place_id, "now": _now()})
     return get_place(db, place_id)
 
@@ -117,10 +146,10 @@ def get_place(db, place_id: str) -> dict[str, Any]:
 def update_place(db, place_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     current = get_place(db, place_id)
     values = _clean({**current, **{k: v for k, v in fields.items() if v is not None}})
-    if values["kind"] == "home" and db.execute("SELECT 1 FROM places WHERE kind = 'home' AND id != ?", (place_id,)).fetchone():
-        raise PlaceError("You already have a Home.")
+    _check_homes(db, values, place_id)
     moved = values["address"] != current["address"]
-    db.execute("UPDATE places SET name = :name, kind = :kind, address = :address, keywords = :keywords, extra = :extra WHERE id = :id", {**values, "id": place_id})
+    db.execute("UPDATE places SET name = :name, kind = :kind, address = :address, keywords = :keywords, extra = :extra, home_for = :home_for WHERE id = :id",
+               {**values, "id": place_id})
     if moved:  # new address: forget the map point and the estimated (not manual) travel times
         db.execute("UPDATE places SET lat = NULL, lon = NULL WHERE id = ?", (place_id,))
         db.execute("DELETE FROM travel_times WHERE manual = 0 AND (a = ? OR b = ?)", (place_id, place_id))
@@ -129,14 +158,26 @@ def update_place(db, place_id: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 def delete_place(db, place_id: str) -> bool:
     db.execute("DELETE FROM travel_times WHERE a = ? OR b = ?", (place_id, place_id))
-    if _setting(db, "lift_place") == place_id:
-        _set(db, "lift_place", None)
+    for term in TERMS:
+        if _setting(db, f"lift_place_{term}") == place_id:
+            _set(db, f"lift_place_{term}", None)
     return bool(db.execute("DELETE FROM places WHERE id = ?", (place_id,)).rowcount)
 
 
-def home(db) -> dict[str, Any] | None:
-    row = db.execute("SELECT * FROM places WHERE kind = 'home' LIMIT 1").fetchone()
-    return dict(row) if row else None
+def term_on(db, day: date) -> str:
+    from assistant import work
+    return work.term_kind(db, day)
+
+
+def home_on(places: list[dict[str, Any]], term: str) -> dict[str, Any] | None:
+    """The home for a school term or a break (an all-year home covers both)."""
+    homes = [p for p in places if p["kind"] == "home"]
+    return (next((p for p in homes if p.get("home_for") == term), None)
+            or next((p for p in homes if p.get("home_for", "always") == "always"), None))
+
+
+def lift_place(db, term: str) -> str | None:
+    return _setting(db, f"lift_place_{term}")
 
 
 def resolve(location: str, places: list[dict[str, Any]]) -> dict[str, Any] | str | None:
@@ -281,7 +322,7 @@ def day_travel(db, day: date, events: list[dict[str, Any]], places: list[dict[st
                table: dict | None = None) -> dict[str, Any]:
     """Travel strips and warnings for one day's fixed events (starting and ending at Home)."""
     places = list_places(db) if places is None else places
-    start_home = next((p for p in places if p["kind"] == "home"), None)
+    start_home = home_on(places, term_on(db, day))
     if not places:
         return {"strips": [], "warnings": []}
     table = travel_table(db) if table is None else table
@@ -318,16 +359,17 @@ def day_travel(db, day: date, events: list[dict[str, Any]], places: list[dict[st
     return {"strips": strips, "warnings": warnings}
 
 
-def workout_padding(db, kind: str, places: list[dict[str, Any]] | None = None, table: dict | None = None) -> int:
-    """Travel minutes on each side of a strength workout when you lift away from Home."""
+def workout_padding(db, kind: str, day: date, places: list[dict[str, Any]] | None = None, table: dict | None = None) -> int:
+    """Travel minutes on each side of a strength workout when you lift away from that day's home."""
     if kind != "strength":
         return 0
-    lift = _setting(db, "lift_place")
+    term = term_on(db, day)
+    lift = lift_place(db, term)
     if not lift:
         return 0
     places = list_places(db) if places is None else places
     gym = next((p for p in places if p["id"] == lift), None)
-    start_home = next((p for p in places if p["kind"] == "home"), None)
+    start_home = home_on(places, term)
     return travel_minutes(db, start_home, gym, table) if gym and start_home else 0
 
 
