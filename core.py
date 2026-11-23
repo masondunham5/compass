@@ -86,7 +86,9 @@ def migrate_database_name() -> bool:
 
 def connection() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DATABASE)
+    # Wait up to 30 s for another writer (the background Outlook/Garmin syncs) instead of failing
+    # after SQLite's default 5 s with "database is locked".
+    db = sqlite3.connect(DATABASE, timeout=30)
     db.row_factory = sqlite3.Row
     return db
 

@@ -614,6 +614,7 @@ def reply(db, history: list[dict[str, str]], transport: Transport | None = None,
     messages += [{"role": m["role"], "content": str(m["content"])[:2000]} for m in history]
     proposals: list[dict[str, Any]] = []
     for _ in range(MAX_ROUNDS):
+        db.commit()  # never hold a database lock while waiting on the AI service
         data = _call(provider, key, "POST", "/chat/completions",
                      {"model": model, "messages": messages, "tools": TOOLS, "tool_choice": "auto", "temperature": 0.2, "max_tokens": 900},
                      transport=transport)

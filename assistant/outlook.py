@@ -286,6 +286,7 @@ def _move_to_main(db: sqlite3.Connection, graph: Graph) -> None:
         graph.call("DELETE", f"/me/events/{urllib.parse.quote(row[0])}")
     db.execute("DELETE FROM outlook_links")
     _set(db, "outlook_target", TARGET)
+    db.commit()
 
 
 def _wanted(db: sqlite3.Connection, start: date, end: date) -> dict[str, dict[str, Any]]:
@@ -313,6 +314,8 @@ def sync(db: sqlite3.Connection, transport: Transport | None = None, today: date
     """Make your Calendar's Compass events match accepted plan blocks and your own events (yesterday
     through three weeks out), then read the rest of the Calendar so its events count as busy time.
 
+    Each database write is committed before the next call to Microsoft, so a slow sync never
+    keeps the database locked (other requests would fail with "database is locked").
     Only one sync runs at a time (Sync now, the debounced sync after edits and the background loop
     can overlap), and each one commits before letting the next in — even after an error — so a
     created event's link is always visible to the next sync. Otherwise both would create it."""
@@ -336,6 +339,7 @@ def _sync(db: sqlite3.Connection, transport: Transport | None, today: date | Non
         if _stale(db, link_id, wanted, start):
             graph.call("DELETE", f"/me/events/{urllib.parse.quote(link['event_id'])}")
             db.execute("DELETE FROM outlook_links WHERE block_id = ?", (link_id,))
+            db.commit()  # never hold a write lock across the next network call
             counts["deleted"] += 1
     for block_id, event in wanted.items():
         fingerprint = _fingerprint(event)
@@ -347,10 +351,12 @@ def _sync(db: sqlite3.Connection, transport: Transport | None, today: date | Non
             status, _ = graph.call("PATCH", f"/me/events/{urllib.parse.quote(link['event_id'])}", event)
             if status != 404:
                 db.execute("UPDATE outlook_links SET fingerprint = ?, synced_at = ? WHERE block_id = ?", (fingerprint, now, block_id))
+                db.commit()
                 counts["updated"] += 1
                 continue
         _, created = graph.call("POST", "/me/calendar/events", event)
         db.execute("INSERT OR REPLACE INTO outlook_links (block_id, event_id, fingerprint, synced_at) VALUES (?, ?, ?, ?)", (block_id, created["id"], fingerprint, now))
+        db.commit()
         counts["created"] += 1
     linked = {row[0] for row in db.execute("SELECT event_id FROM outlook_links")}  # includes ones created just now
     counts["read"], counts["deleted"] = pull_events(db, graph, today, skip=linked, counts=counts)

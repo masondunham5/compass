@@ -190,6 +190,7 @@ def build(db: sqlite3.Connection, start: date | None = None, days: int = 7, now:
     start = start or now.date()
     horizon_end = start + timedelta(days=days - 1)
     cleanup(db)
+    db.commit()  # don't hold a write lock while the rest of the draft is built
     every_block = _accepted(db, start, horizon_end)
     plan_days = _build_days(db, start, days, now, every_block)  # missed blocks keep their slot busy…
     accepted = [b for b in every_block if b["outcome"] != "missed"]  # …but don't count as work done

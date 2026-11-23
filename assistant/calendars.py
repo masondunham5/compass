@@ -212,6 +212,7 @@ def sync_stale(db: sqlite3.Connection, max_age_hours: float = STALE_HOURS) -> in
             refreshed += 1
         except CalendarError:
             pass
+        db.commit()  # release the write lock before fetching the next feed
     return refreshed
 
 

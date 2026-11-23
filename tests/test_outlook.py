@@ -215,3 +215,29 @@ def test_api_validation_status_and_disconnect(db):
         assert client.get("/api/assistant/outlook").json()["connected"] is True
         assert client.post("/api/assistant/outlook/disconnect").json()["connected"] is False
         assert not outlook._token_path().exists()
+
+
+def test_sync_never_holds_the_database_locked_while_waiting_on_outlook(db):
+    """The calendar and other requests must be able to write while a sync talks to Microsoft."""
+    import sqlite3
+    graph, blocked = FakeGraph(), []
+    for offset in (1, 2, 3):
+        add_block(db, f"b{offset}", offset, 9 * 60, 10 * 60)
+    db.commit()
+
+    def watching(method, url, headers, body):
+        other = sqlite3.connect(core.DATABASE, timeout=0.2)
+        try:
+            other.execute("BEGIN IMMEDIATE")  # what another request's first write needs
+            other.rollback()
+        except sqlite3.OperationalError:
+            blocked.append(f"{method} {url.split('/v1.0', 1)[1][:30]}")
+        finally:
+            other.close()
+        return graph(method, url, headers, body)
+
+    outlook.sync(db, transport=watching)
+    db.execute("DELETE FROM plan_blocks WHERE id = 'b2'")
+    db.commit()
+    outlook.sync(db, transport=watching)
+    assert blocked == []
