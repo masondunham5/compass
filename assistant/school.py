@@ -51,8 +51,52 @@ class SchoolSourceError(RuntimeError):
     pass
 
 
+SYNC_FILES = ("app.py", "completed.json", "manual_tasks.json", "task_overrides.json", "task_details.json")
+
+
+def sync_dir() -> Path:
+    """Where a server copy of Compass keeps School To Do files pushed from the PC that runs it."""
+    import core
+    return core.DATA_DIR / "school_sync"
+
+
 def _paths() -> tuple[Path, Path]:
-    return Path(os.getenv("SCHOOL_TODO_APP", DEFAULT_APP)), Path(os.getenv("SCHOOL_TODO_DATA", DEFAULT_DATA))
+    """Explicit overrides first, then a synced copy (Compass running on another computer), then
+    the School To Do app next to Compass on this computer."""
+    if os.getenv("SCHOOL_TODO_APP") or os.getenv("SCHOOL_TODO_DATA"):
+        return Path(os.getenv("SCHOOL_TODO_APP", DEFAULT_APP)), Path(os.getenv("SCHOOL_TODO_DATA", DEFAULT_DATA))
+    synced = sync_dir()
+    if (synced / "app.py").exists():
+        return synced / "app.py", synced
+    return DEFAULT_APP, DEFAULT_DATA
+
+
+def receive_sync(files: dict[str, str]) -> list[str]:
+    """Store School To Do files pushed from another computer (only the known file names, JSON
+    files must parse). Written to a temp name then swapped in, so a reader never sees half a file."""
+    unknown = sorted(set(files) - set(SYNC_FILES))
+    if unknown:
+        raise SchoolSourceError(f"Unexpected file(s): {', '.join(unknown)}")
+    if "app.py" not in files:
+        raise SchoolSourceError("app.py is required.")
+    for name, text in files.items():
+        if len(text) > 4_000_000:
+            raise SchoolSourceError(f"{name} is too large.")
+        if name.endswith(".json"):
+            try:
+                json.loads(text)
+            except ValueError as error:
+                raise SchoolSourceError(f"{name} isn't valid JSON.") from error
+    folder = sync_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        temp = folder / f".{name}.tmp"
+        temp.write_text(text, encoding="utf-8")
+        temp.replace(folder / name)
+    for name in set(SYNC_FILES) - set(files) - {"app.py"}:  # deleted on the PC -> deleted here
+        (folder / name).unlink(missing_ok=True)
+    (folder / "received_at.txt").write_text(datetime.now().astimezone().isoformat(timespec="seconds"), encoding="utf-8")
+    return sorted(files)
 
 
 def _read_json(path: Path, default: Any) -> Any:

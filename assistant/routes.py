@@ -146,6 +146,30 @@ class ForceRequest(BaseModel):
     on: bool = True
 
 
+class SchoolSyncRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=200)
+    files: dict[str, str]
+
+
+@router.post("/school/sync")
+def school_sync(payload: SchoolSyncRequest) -> dict[str, Any]:
+    """Receive School To Do files from the computer that runs it (scripts/push_school_todo.py).
+    Needs the token in data/school_sync_token.txt on this computer."""
+    import hmac
+
+    import core
+    from assistant import school
+    token_file = core.DATA_DIR / "school_sync_token.txt"
+    expected = token_file.read_text(encoding="utf-8").strip() if token_file.exists() else ""
+    if not expected or not hmac.compare_digest(expected, payload.token.strip()):
+        raise HTTPException(status_code=403, detail="Wrong or missing sync token.")
+    try:
+        stored = school.receive_sync(payload.files)
+    except school.SchoolSourceError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"stored": stored, "tasks": len(school.load_tasks())}
+
+
 @router.post("/school/force")
 def force_overdue(payload: ForceRequest) -> dict[str, Any]:
     from assistant import planner
