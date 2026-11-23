@@ -1,12 +1,14 @@
 /* Rescheduling sheet: move one workout or push the plan back, with a live preview and undo. */
 
-const reschedule = { session: null, mode: "move", toDate: null, days: 1, fromDate: null, request: null, timer: null };
+const reschedule = { session: null, mode: "move", toDate: null, days: 1, fromDate: null, request: null, timer: null, otherId: null };
 
 function addDays(iso, days) { const d = asDate(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 
 function openReschedule(session = null, mode = session ? "move" : "push") {
   const today = state.today.today;
-  Object.assign(reschedule, { session, mode, toDate: null, days: 1, fromDate: session?.date && session.date > today ? session.date : today });
+  Object.assign(reschedule, { session, mode, toDate: null, days: 1, fromDate: session?.date && session.date > today ? session.date : today, otherId: null });
+  $("#swap-repeat").value = "0"; $("#swap-chips").innerHTML = "";
+  if (session) loadSwapOptions(session.id);
   $("#reschedule-title").textContent = session ? cleanTitle(session.title) : "Push the plan back";
   $("#reschedule-kicker").textContent = session ? `${fmtLong(session.date)} · reschedule` : "Reschedule";
   $("#reschedule-mode").hidden = !session;
@@ -27,20 +29,35 @@ function renderRescheduleMode() {
   const mode = reschedule.mode;
   $$("#reschedule-mode [data-mode]").forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
   $("#reschedule-move").hidden = mode !== "move";
+  $("#reschedule-swap").hidden = mode !== "swap";
+  $$("#swap-chips .chip").forEach(chip => chip.classList.toggle("active", chip.dataset.other === reschedule.otherId));
   $("#reschedule-push").hidden = mode !== "push";
   $$("#move-chips .chip").forEach(chip => chip.classList.toggle("active", chip.dataset.date === reschedule.toDate));
   $$("#push-chips .chip").forEach(chip => chip.classList.toggle("active", Number(chip.dataset.days) === reschedule.days));
   reschedule.request = mode === "move"
     ? (reschedule.toDate && reschedule.session ? { action: "move", session_id: reschedule.session.id, to_date: reschedule.toDate } : null)
-    : { action: "push", from_date: $("#push-from").value || state.today.today, days: reschedule.days, include_runs: $("#push-runs").checked };
+    : mode === "swap"
+      ? (reschedule.otherId && reschedule.session ? { action: "swap", session_id: reschedule.session.id, other_id: reschedule.otherId, repeat: Number($("#swap-repeat").value) } : null)
+      : { action: "push", from_date: $("#push-from").value || state.today.today, days: reschedule.days, include_runs: $("#push-runs").checked };
   clearTimeout(reschedule.timer);
   reschedule.timer = setTimeout(previewReschedule, 120);
 }
 
+async function loadSwapOptions(sessionId) {
+  try {
+    const { sessions } = await api(`/api/schedule/swap-options/${encodeURIComponent(sessionId)}`);
+    $("#swap-chips").innerHTML = sessions.length
+      ? sessions.map(s => `<button type="button" class="chip" data-other="${esc(s.id)}">${esc(fmtDow(s.session_date))} ${asDate(s.session_date).getDate()} · ${esc(cleanTitle(s.title))}</button>`).join("")
+      : `<p class="muted">No other planned workouts nearby.</p>`;
+    $$("#swap-chips .chip").forEach(chip => chip.onclick = () => { reschedule.otherId = chip.dataset.other; renderRescheduleMode(); });
+  } catch { $("#swap-chips").innerHTML = `<p class="muted">Couldn't load workouts.</p>`; }
+}
+$("#swap-repeat").onchange = () => renderRescheduleMode();
+
 async function previewReschedule() {
   const box = $("#reschedule-preview");
   const apply = $("#reschedule-apply");
-  if (!reschedule.request) { box.innerHTML = '<p class="muted">Pick a new day.</p>'; apply.disabled = true; return; }
+  if (!reschedule.request) { box.innerHTML = `<p class="muted">${reschedule.mode === "swap" ? "Pick a workout to swap with." : "Pick a new day."}</p>`; apply.disabled = true; return; }
   try {
     const plan = await api("/api/schedule/preview", { method: "POST", body: JSON.stringify(reschedule.request) });
     const list = items => items.map(item => `<li><span>${esc(cleanTitle(item.title || item.id))}</span><span>${item.reason ? esc(item.reason) : `${esc(fmtDow(item.from))} ${asDate(item.from).getDate()} → ${esc(fmtDow(item.to))} ${asDate(item.to).getDate()}`}</span></li>`).join("");

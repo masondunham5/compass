@@ -1358,8 +1358,10 @@ def delete_race(race_id: str) -> dict[str, Any]:
 
 
 class ScheduleRequest(BaseModel):
-    action: str = Field(pattern="^(move|push|skip)$")
+    action: str = Field(pattern="^(move|push|skip|swap)$")
     session_id: str | None = None
+    other_id: str | None = None   # swap: the workout to trade days with
+    repeat: int = Field(default=0, ge=0, le=8)  # swap: also trade the next N pairs of the same two workouts
     to_date: str | None = None
     from_date: str | None = None
     days: int = Field(default=1, ge=1, le=60)
@@ -1375,6 +1377,10 @@ def _schedule_plan(db: sqlite3.Connection, request: ScheduleRequest) -> dict[str
                 raise HTTPException(status_code=400, detail="Pick a workout and a new date.")
             date.fromisoformat(request.to_date)
             return schedule.move_session(db, request.session_id, request.to_date)
+        if request.action == "swap":
+            if not request.session_id or not request.other_id:
+                raise HTTPException(status_code=400, detail="Pick the workout to swap with.")
+            return schedule.swap_sessions(db, request.session_id, request.other_id, request.repeat)
         if request.action == "push":
             start = request.from_date or date.today().isoformat()
             date.fromisoformat(start)
@@ -1412,6 +1418,13 @@ def undo_schedule() -> dict[str, Any]:
         result = schedule.undo_last(db)
     outlook.sync_soon()
     return result
+
+
+@app.get("/api/schedule/swap-options/{session_id}")
+def swap_options(session_id: str) -> dict[str, Any]:
+    from assistant import schedule
+    with connection() as db:
+        return {"sessions": schedule.swap_options(db, session_id)}
 
 
 @app.get("/api/schedule/last")

@@ -99,3 +99,35 @@ def test_race_runs_never_cross_race_day(client):
     preview = client.post("/api/schedule/preview", json={"action": "push", "days": 1}).json()
     reasons = {s["id"]: s["reason"] for s in preview["skipped"]}
     assert reasons["shakeout"] == "would land on or after race day" and reasons["raceday"] == "race day"
+
+
+def test_workout_type_ignores_week_tag_and_variant():
+    from assistant.schedule import workout_type
+    assert workout_type("W5 · Chest, Triceps & Shoulders · Volume") == workout_type("Chest, Triceps & Shoulders") == "chest, triceps & shoulders"
+    assert workout_type("W6 · Back & Biceps") == "back & biceps"
+
+
+def test_swap_two_workouts_and_the_next_pairs_then_undo(client):
+    with core.connection() as db:
+        rows = [("c1", 10, "W5 · Chest"), ("b1", 11, "W5 · Back"), ("r1", 12, "W5 · Easy Run"), ("c2", 13, "W5 · Chest · Volume"),
+                ("b2", 14, "W5 · Back · Volume"), ("c3", 17, "W6 · Chest"), ("b3", 18, "W6 · Back")]
+        for sid, offset, title in rows:
+            kind = "run" if "Run" in title else "strength"
+            db.execute("INSERT INTO sessions (id, session_date, kind, title, minutes, status, locked, source) VALUES (?, ?, ?, ?, 60, 'planned', 0, 'plan:x')",
+                       (sid, day(offset), kind, title))
+    options = client.get("/api/schedule/swap-options/c1").json()["sessions"]
+    assert "b1" in [s["id"] for s in options] and "c1" not in [s["id"] for s in options]
+    before = dates(client)
+    preview = client.post("/api/schedule/preview", json={"action": "swap", "session_id": "c1", "other_id": "b1", "repeat": 1}).json()
+    assert dates(client) == before and len(preview["changes"]) == 4
+    client.post("/api/schedule/apply", json={"action": "swap", "session_id": "c1", "other_id": "b1", "repeat": 1})
+    after = dates(client)
+    assert (after["b1"], after["c1"], after["b2"], after["c2"]) == (day(10), day(11), day(13), day(14))
+    assert (after["c3"], after["b3"], after["r1"]) == (day(17), day(18), day(12))  # only one extra pair
+    assert client.post("/api/schedule/undo").json()["restored"] == 4 and dates(client) == before
+
+
+def test_swap_with_a_locked_workout_moves_neither(client):
+    preview = client.post("/api/schedule/preview", json={"action": "swap", "session_id": "back", "other_id": "locked"}).json()
+    assert preview["changes"] == [] and {s["id"] for s in preview["skipped"]} == {"back", "locked"}
+    assert client.post("/api/schedule/preview", json={"action": "swap", "session_id": "back"}).status_code == 400

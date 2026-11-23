@@ -660,3 +660,45 @@ input[type="range"] { accent-color: var(--accent); }
 .checkin-list li:first-child { border-top: 0; }
 .checkin-list small { display: block; color: var(--faint); font-size: .82rem; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+
+/* ---------- Two-column pages ----------
+   Today: schedule | training. Week: calendar | check-in, plan and to-dos.
+   On phones the wrappers disappear (display: contents) and `order` keeps the
+   check-in and plan above the calendar, as before. */
+#view-week.active { display: flex; flex-direction: column; }
+.week-main, .week-side { display: contents; }
+.week-main > .cal-toolbar { order: 1; }
+.week-main > #cal-strip { order: 2; }
+.week-side > #checkin-week { order: 3; }
+.week-side > #plan-summary { order: 4; }
+.week-main > #cal-grid { order: 5; }
+.week-main > #cal-legend { order: 6; }
+.week-main > #week-days { order: 7; }
+.week-side > * { order: 8; }
+.week-side > .todo-head + .faint { margin: 6px 0 10px; }
+
+/* ---------- Desktop: side navigation, wide content ---------- */
+@media (min-width: 1100px) {
+  :root { --rail: 104px; }
+  .screens { max-width: calc(1280px + var(--rail)); padding: 44px 40px 48px calc(var(--rail) + 40px); }
+  .view.active { max-width: 860px; margin: 0 auto; }
+  #view-today.active, #view-week.active { max-width: none; }
+  .tabbar {
+    top: 0; bottom: 0; right: auto; width: var(--rail); flex-direction: column; justify-content: flex-start; gap: 6px;
+    padding: 40px 10px; border-top: 0; border-right: 1px solid var(--line);
+  }
+  .tabbar button { flex: 0 0 auto; max-width: none; padding: 12px 0; border-radius: 14px; }
+  .tabbar button.active { background: var(--surface-2); }
+  #startup-diagnostic { left: calc(var(--rail) + 16px); bottom: 16px; }
+
+  #view-today.active { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: 32px; align-items: start; }
+  #view-today > .page-head, #view-today > .week-strip { grid-column: 1 / -1; }
+  .today-side > .section-title:first-child { margin-top: 0; }
+
+  #view-week.active { display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; column-gap: 32px; align-items: start; }
+  #view-week > .page-head { grid-column: 1 / -1; }
+  .week-main, .week-side { display: block; }
+  .week-side { position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow: auto; padding-right: 2px; }
+  .week-side .todo-head { margin-top: 22px; }
+  .week-side > #checkin-week .checkin-card { margin-top: 0; }
+}

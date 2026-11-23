@@ -1,4 +1,4 @@
-"""Rescheduling: move one workout, skip it, or push the plan back — with a preview and one-step undo.
+"""Rescheduling: move one workout, skip it, swap two, or push the plan back — with a preview and one-step undo.
 
 Rules (shared by every operation):
 - Only planned sessions move. Completed, cancelled, and sessions with logged sets stay put.
@@ -10,6 +10,7 @@ Rules (shared by every operation):
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import date, timedelta
 from typing import Any
@@ -119,6 +120,60 @@ def skip_session(db: sqlite3.Connection, session_id: str, mode: str) -> dict[str
     if mode == "push":
         return push_back(db, row[0], 1)
     return move_session(db, session_id, next_day)
+
+
+def workout_type(title: str) -> str:
+    """'W5 · Chest, Triceps & Shoulders · Volume' -> 'chest, triceps & shoulders' (week tag and variant dropped)."""
+    parts = [part.strip() for part in str(title).split("·") if part.strip() and not re.fullmatch(r"W\d+", part.strip())]
+    return (parts[0] if parts else str(title)).lower()
+
+
+def swap_options(db: sqlite3.Connection, session_id: str, days: int = 10) -> list[dict[str, Any]]:
+    """Planned workouts within `days` of this one that it could trade days with."""
+    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        return []
+    around = date.fromisoformat(row["session_date"])
+    first = max(date.today(), around - timedelta(days=days)).isoformat()
+    rows = db.execute(
+        "SELECT id, session_date, kind, title FROM sessions WHERE status = 'planned' AND id != ? AND session_date BETWEEN ? AND ? "
+        "AND session_date != ? AND kind IN ('strength', 'run', 'mobility') ORDER BY session_date, kind",
+        (session_id, first, (around + timedelta(days=days)).isoformat(), row["session_date"]),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def swap_sessions(db: sqlite3.Connection, session_id: str, other_id: str, repeat: int = 0) -> dict[str, Any]:
+    """Trade the days of two workouts. With `repeat`, also trade the next `repeat` pairs of the same
+    two workout types (e.g. the following Chest / Back days), so the spacing stays consistent."""
+    first = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    second = db.execute("SELECT * FROM sessions WHERE id = ?", (other_id,)).fetchone()
+    if not first or not second:
+        return {"changes": [], "skipped": [{"id": session_id if not first else other_id, "reason": "not found"}], "conflicts": [], "busy_days": []}
+    pairs, used = [(first, second)], {first["id"], second["id"]}
+    types = (workout_type(first["title"]), workout_type(second["title"]))
+    after = max(first["session_date"], second["session_date"])
+    for _ in range(max(0, min(repeat, 8))):
+        found = []
+        for wanted in types:
+            row = next((r for r in db.execute("SELECT * FROM sessions WHERE status = 'planned' AND session_date > ? ORDER BY session_date", (after,))
+                        if r["id"] not in used and workout_type(r["title"]) == wanted), None)
+            found.append(row)
+        if not all(found):
+            break
+        pairs.append((found[0], found[1]))
+        used.update(row["id"] for row in found)
+        after = max(found[0]["session_date"], found[1]["session_date"])
+    moves, blocked = [], []
+    for a, b in pairs:
+        reason = _movable(db, a) or _movable(db, b)
+        if reason:  # a swap is all or nothing for each pair
+            blocked += [{"id": r["id"], "title": r["title"], "kind": r["kind"], "from": r["session_date"], "to": r["session_date"], "reason": reason} for r in (a, b)]
+            continue
+        moves += [(a["id"], b["session_date"]), (b["id"], a["session_date"])]
+    plan = plan_moves(db, moves)
+    plan["skipped"] = blocked + plan["skipped"]
+    return plan
 
 
 def undo_last(db: sqlite3.Connection) -> dict[str, Any]:

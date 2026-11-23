@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui19">
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui20">
     <title>Compass</title>
   </head>
   <body>
@@ -38,9 +38,12 @@
             <button class="icon-btn" id="today-checkin" type="button" aria-label="Daily check-in" title="Daily check-in"><svg><use href="#i-plus"/></svg></button>
           </header>
           <div class="week-strip" id="week-strip" role="tablist" aria-label="This week"></div>
+          <div class="today-main">
           <div id="today-alerts" class="stack alert-stack"></div>
           <article class="card agenda-card" id="agenda-card" hidden></article>
           <div id="checkin-today"></div>
+          </div>
+          <div class="today-side">
           <h2 class="section-title">Training</h2>
           <article class="card session-card" id="today-card"><p class="muted pad">Loading today…</p></article>
           <div id="today-extra"></div>
@@ -49,6 +52,7 @@
           <p class="up-next" id="up-next" hidden></p>
           <h2 class="section-title">Daily habits</h2>
           <article class="card list-card" id="habit-list"></article>
+          </div>
         </section>
 
         <!-- RECOVERY -->
@@ -133,20 +137,24 @@
             <div><p class="kicker" id="week-kicker">&nbsp;</p><h1 id="week-title">Week</h1></div>
             <div class="week-nav"><button type="button" class="icon-btn small" id="week-prev" aria-label="Previous week"><svg><use href="#i-back"/></svg></button><button type="button" class="icon-btn small" id="week-next" aria-label="Next week"><svg><use href="#i-chevron"/></svg></button></div>
           </header>
+          <div class="week-main">
           <div class="cal-toolbar">
             <div class="segmented small" id="cal-mode" role="tablist" aria-label="Calendar view"><button type="button" data-mode="day">Day</button><button type="button" data-mode="week">Week</button><button type="button" data-mode="list">List</button></div>
             <button class="btn btn-primary small" type="button" id="cal-add">+ Add</button>
           </div>
           <div id="cal-strip" class="cal-strip" hidden></div>
-          <div id="checkin-week"></div>
-          <div id="plan-summary" class="plan-summary"></div>
           <div id="cal-grid" hidden></div>
           <div id="cal-legend" class="cal-legend" hidden></div>
           <div id="week-days" class="stack"></div>
+          </div>
+          <div class="week-side">
+          <div id="checkin-week"></div>
+          <div id="plan-summary" class="plan-summary"></div>
           <div class="todo-head"><h2 class="section-title">To-dos</h2><button class="btn btn-ghost small" type="button" id="todo-add">+ To-do</button></div>
           <p class="faint" id="todo-hint">Give each one a time estimate; the plan finds time for it.</p>
           <article class="card list-card" id="todo-list"></article>
           <button class="btn btn-ghost full" type="button" id="week-push" style="margin-top:14px">Push training back…</button>
+          </div>
         </section>
 
         <!-- MORE -->
@@ -283,8 +291,10 @@
     <!-- Rescheduling -->
     <dialog id="reschedule-sheet" class="sheet"><div><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button>
       <p class="kicker" id="reschedule-kicker">Reschedule</p><h2 id="reschedule-title">Change the plan</h2>
-      <div class="segmented" id="reschedule-mode"><button type="button" class="active" data-mode="move">Move this one</button><button type="button" data-mode="push">Push plan back</button></div>
+      <div class="segmented" id="reschedule-mode"><button type="button" class="active" data-mode="move">Move</button><button type="button" data-mode="swap">Swap</button><button type="button" data-mode="push">Push back</button></div>
       <div id="reschedule-move"><div class="chip-row wrap" id="move-chips"></div><label>Or pick a date<input id="move-date" type="date"></label></div>
+      <div id="reschedule-swap" hidden><p class="faint">Trade days with:</p><div class="chip-row wrap" id="swap-chips"></div>
+        <label>Then<select id="swap-repeat"><option value="0">Just these two</option><option value="1">Also the next pair of these workouts</option><option value="2">And the next 2 pairs</option><option value="3">And the next 3 pairs</option></select></label></div>
       <div id="reschedule-push" hidden><div class="chip-row wrap" id="push-chips"></div><label>Starting from<input id="push-from" type="date"></label><label class="toggle-row"><input id="push-runs" type="checkbox" checked><span><b>Include runs</b><small>Race day never moves; race-plan runs stop before it.</small></span></label></div>
       <div id="reschedule-preview" class="race-preview"></div>
       <button class="btn btn-primary full" type="button" id="reschedule-apply" disabled>Apply</button>
@@ -310,12 +320,12 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__compassBootState = "loading";</script>
-    <script src="/static/app.js?v=compass-2026-11-22-ui19" onerror="window.__compassBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=compass-2026-11-22-ui19"></script>
-    <script src="/static/schedule.js?v=compass-2026-11-22-ui19"></script>
-    <script src="/static/assistant.js?v=compass-2026-11-22-ui19"></script>
-    <script src="/static/planner.js?v=compass-2026-11-22-ui19"></script>
-    <script src="/static/calendar.js?v=compass-2026-11-22-ui19"></script>
+    <script src="/static/app.js?v=compass-2026-11-22-ui20" onerror="window.__compassBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-22-ui20"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-22-ui20"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-22-ui20"></script>
+    <script src="/static/planner.js?v=compass-2026-11-22-ui20"></script>
+    <script src="/static/calendar.js?v=compass-2026-11-22-ui20"></script>
     <script>
       setTimeout(() => {
         if (window.__compassBootState === "ready" || window.__compassBootState.startsWith("failed:")) return;
