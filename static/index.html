@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0e0f13">
     <link rel="manifest" href="/static/manifest.webmanifest">
-    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui20">
+    <link rel="stylesheet" href="/static/styles.css?v=compass-2026-11-22-ui21">
     <title>Compass</title>
   </head>
   <body>
@@ -18,6 +18,9 @@
       <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.6"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2.5-6.5L4 12Z"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
       <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
@@ -239,8 +242,13 @@
           </article>
           <article class="card prose-card" id="outlook-settings">
             <h3>Personal Outlook</h3>
-            <p>Puts your accepted plan (study blocks, workouts, exam review) into a separate “Compass” calendar in your personal Outlook, so it shows on your phone. Compass only ever changes that one calendar.</p>
+            <p>Puts your accepted plan and your Compass events into your personal Outlook Calendar (tagged “Compass”), and reads your other Outlook events as busy time. Compass only changes your own Outlook events when you ask it to.</p>
             <div id="outlook-body"></div>
+          </article>
+          <article class="card prose-card" id="chat-settings">
+            <h3>AI assistant</h3>
+            <p>Talk or type to change your schedule (the chat button on every screen). Built-in commands like “swap chest and back” work without a key; for everything else, add a free Groq API key from console.groq.com. xAI and Gemini keys work too.</p>
+            <div id="chat-settings-body"></div>
           </article>
           <article class="card prose-card">
             <h3>Reminders</h3>
@@ -299,6 +307,18 @@
       <div id="reschedule-preview" class="race-preview"></div>
       <button class="btn btn-primary full" type="button" id="reschedule-apply" disabled>Apply</button>
     </div></dialog>
+    <!-- Chat with Compass -->
+    <button type="button" class="chat-fab" id="chat-fab" aria-label="Ask Compass" title="Ask Compass"><svg><use href="#i-chat"/></svg></button>
+    <dialog id="chat-sheet" class="sheet chat-sheet"><div>
+      <button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      <p class="kicker" id="chat-kicker">Ask Compass</p>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <button type="button" class="icon-btn" id="chat-mic" aria-label="Speak" title="Speak" hidden><svg><use href="#i-mic"/></svg></button>
+        <input id="chat-input" autocomplete="off" maxlength="2000" placeholder="“Swap chest and back this week and next”">
+        <button type="submit" class="icon-btn primary" id="chat-send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      </form>
+    </div></dialog>
     <div id="undo-bar" class="undo-bar" hidden role="status"><span id="undo-text"></span><button type="button" id="undo-button">Undo</button></div>
 
     <!-- Health logging -->
@@ -320,12 +340,13 @@
     <dialog id="session-editor-dialog" class="sheet"><form id="session-editor-form"><button class="sheet-close" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button><p class="kicker">Edit workout</p><h2 id="editor-heading">Edit workout</h2><p class="muted">Move this session, adjust its workout, or cancel it. Logged sets stay in your history.</p><label>Workout name<input id="editor-title" maxlength="120"></label><div class="form-grid"><label>Date<input id="editor-date" type="date"></label><label>Time budget <span>minutes</span><input id="editor-minutes" type="number" min="10" max="360"></label></div><label>Session note<input id="editor-description" maxlength="500"></label><label>Exercises <span>One per line: Exercise — sets × rep range</span><textarea id="editor-workout" rows="8"></textarea></label><button class="btn btn-ghost full" id="editor-add-exercise" type="button">+ Add an exercise line</button><div class="sheet-actions"><button class="btn btn-danger" id="editor-cancel-session" type="button">Cancel workout</button><button class="btn btn-primary" type="submit">Save changes</button></div></form></dialog>
 
     <script>window.__compassBootState = "loading";</script>
-    <script src="/static/app.js?v=compass-2026-11-22-ui20" onerror="window.__compassBootState='failed: script-error'"></script>
-    <script src="/static/health.js?v=compass-2026-11-22-ui20"></script>
-    <script src="/static/schedule.js?v=compass-2026-11-22-ui20"></script>
-    <script src="/static/assistant.js?v=compass-2026-11-22-ui20"></script>
-    <script src="/static/planner.js?v=compass-2026-11-22-ui20"></script>
-    <script src="/static/calendar.js?v=compass-2026-11-22-ui20"></script>
+    <script src="/static/app.js?v=compass-2026-11-22-ui21" onerror="window.__compassBootState='failed: script-error'"></script>
+    <script src="/static/health.js?v=compass-2026-11-22-ui21"></script>
+    <script src="/static/schedule.js?v=compass-2026-11-22-ui21"></script>
+    <script src="/static/assistant.js?v=compass-2026-11-22-ui21"></script>
+    <script src="/static/planner.js?v=compass-2026-11-22-ui21"></script>
+    <script src="/static/calendar.js?v=compass-2026-11-22-ui21"></script>
+    <script src="/static/chat.js?v=compass-2026-11-22-ui21"></script>
     <script>
       setTimeout(() => {
         if (window.__compassBootState === "ready" || window.__compassBootState.startsWith("failed:")) return;

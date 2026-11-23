@@ -702,3 +702,34 @@ input[type="range"] { accent-color: var(--accent); }
   .week-side .todo-head { margin-top: 22px; }
   .week-side > #checkin-week .checkin-card { margin-top: 0; }
 }
+
+/* ---------- Chat with Compass ---------- */
+.chat-fab {
+  position: fixed; z-index: 21; right: 16px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px);
+  display: grid; place-items: center; width: 54px; height: 54px; border: 0; border-radius: 50%;
+  background: var(--accent-strong); color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.45); cursor: pointer;
+}
+.chat-fab svg, .chat-form svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.chat-sheet > div { min-height: min(70vh, 640px); grid-template-rows: auto 1fr auto; }
+.chat-log { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 58vh; padding: 4px 2px; }
+.chat-msg { max-width: 88%; padding: 10px 13px; border-radius: 16px; line-height: 1.4; white-space: pre-wrap; }
+.chat-msg.user { align-self: flex-end; background: var(--accent-strong); color: #fff; border-bottom-right-radius: 6px; }
+.chat-msg.assistant { align-self: flex-start; background: var(--surface-2); border-bottom-left-radius: 6px; }
+.chat-msg.assistant small { display: block; margin-top: 4px; color: var(--faint); font-size: .75rem; }
+.chat-msg.thinking { color: var(--muted); font-style: italic; }
+.chat-hint { color: var(--faint); font-size: .9rem; }
+.chat-hint button { margin: 6px 6px 0 0; }
+.proposal { align-self: stretch; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); display: grid; gap: 8px; }
+.proposal b { font-size: .98rem; }
+.proposal ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: .88rem; }
+.proposal .note { margin: 0; }
+.proposal .done-line { color: var(--green, #7bd88f); font-weight: 600; }
+.chat-form { display: flex; gap: 8px; align-items: center; }
+.chat-form input { flex: 1; }
+.chat-form .icon-btn { flex: 0 0 auto; }
+.chat-form .icon-btn.primary { background: var(--accent-strong); color: #fff; }
+#chat-mic.listening { background: #c0392b; color: #fff; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .6; } }
+@media (min-width: 1100px) {
+  .chat-fab { bottom: 24px; right: 28px; }
+}

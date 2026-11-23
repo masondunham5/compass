@@ -16,6 +16,8 @@ __pycache__/
 .env.*
 !.env.example
 Garmin API Key/
+Groq API Key/
+*API Key*/
 *.log
 
 # Test and coverage output

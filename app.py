@@ -93,6 +93,10 @@ from assistant import routes as assistant_routes  # noqa: E402  (calendars, agen
 
 app.include_router(assistant_routes.router)
 
+from assistant import chat as assistant_chat  # noqa: E402  (talk to Compass)
+
+app.include_router(assistant_chat.router)
+
 
 
 class Completion(BaseModel):
