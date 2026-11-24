@@ -423,8 +423,13 @@ def day_travel(db, day: date, events: list[dict[str, Any]], places: list[dict[st
             covered = any(a <= start and b >= start - 15 and b - a >= need * 0.5 for a, b in manual_travel)
             if here_end is not None and leave < here_end:
                 gap = start - here_end
-                warnings.append({"date": day.isoformat(), "message": f"{here_title} ends {_clock(here_end)} at {here['name']} and {event['title']} starts "
-                                                                       f"{_clock(start)} at {place['name']} — about {need} min apart, you have {gap}."})
+                if gap < 0:  # overlapping events in two places: a conflict, not a short gap
+                    message = (f"{here_title} at {here['name']} (until {_clock(here_end)}) overlaps {event['title']} at {place['name']} "
+                               f"(from {_clock(start)}); they're about {need} min apart.")
+                else:
+                    message = (f"{here_title} ends {_clock(here_end)} at {here['name']} and {event['title']} starts "
+                               f"{_clock(start)} at {place['name']} — about {need} min apart, you have {gap}.")
+                warnings.append({"date": day.isoformat(), "message": message})
                 leave = here_end
             if not covered and start > leave:
                 strips.append({"start": max(0, leave), "end": start, "minutes": need, "from": here["name"], "to": place["name"]})

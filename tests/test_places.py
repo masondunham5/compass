@@ -117,6 +117,14 @@ def test_day_travel_strips_warnings_and_your_own_drive_events(db, campus):
     assert (at(9, 35), at(10), "Home", "Campus") not in [(s["start"], s["end"], s["from"], s["to"]) for s in result["strips"]]
 
 
+def test_overlapping_events_in_two_places_say_overlap_not_a_negative_gap(db, campus):
+    work.add_shift(db, "10:00", "15:00", shift_date=TOMORROW.isoformat())
+    feed_event(db, "Career fair", TOMORROW, at(12), at(15), "Bessey Hall 108")
+    result = places.day_travel(db, TOMORROW, availability.fixed_events(db, TOMORROW))
+    message = result["warnings"][0]["message"]
+    assert "overlaps Career fair" in message and "you have -" not in message
+
+
 def test_planner_keeps_travel_time_free_and_pads_gym_workouts(db, campus):
     feed_event(db, "CSE 231", TOMORROW, at(10), at(10, 50), "Bessey Hall 108")
     gym = places.add_place(db, {"name": "IM East", "kind": "gym", "address": "IM East, East Lansing", "keywords": "IM East"})

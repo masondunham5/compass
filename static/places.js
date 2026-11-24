@@ -51,7 +51,7 @@ function placesRender(data) {
       <label id="place-home-for-label" ${(editing?.kind || (data.places.length ? "campus" : "home")) === "home" ? "" : "hidden"}>Home during
         <select id="place-home-for">${Object.entries(data.home_for).map(([k, label]) => `<option value="${k}" ${k === homeDefault ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <label>Address<input id="place-address" maxlength="200" value="${esc(editing?.address || "")}" placeholder="Street, city, state"></label>
-      <label>Matches locations containing <span>comma-separated, e.g. Bessey, BCC, Business College</span><input id="place-keywords" maxlength="500" value="${esc(editing?.keywords || "")}"></label>
+      <label>Matches locations containing <span>comma-separated, e.g. Science Hall, Library, Student Union</span><input id="place-keywords" maxlength="500" value="${esc(editing?.keywords || "")}"></label>
       <label>Extra minutes on arrival <span>parking, walking to the building</span><input id="place-extra" type="number" min="0" max="60" step="5" value="${editing?.extra ?? 0}"></label>
       <p class="note error" id="place-error" hidden></p>
       <div class="sheet-actions">${editing ? `<button class="btn btn-ghost" type="button" id="place-cancel">Cancel</button>` : ""}<button class="btn btn-primary" type="submit">${editing ? "Save" : "Add place"}</button></div>
